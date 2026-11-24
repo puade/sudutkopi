@@ -26,6 +26,7 @@ const ICONS = {
   receipt: svg('<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>'),
   coffee: svg('<path d="M4 9h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V9z"/><path d="M17 10h1.5a2.5 2.5 0 0 1 0 5H17"/><path d="M8 3v3M12 3v3"/>'),
   tag: svg('<path d="M3 12V4h8l9 9-8 8z"/><circle cx="7.5" cy="8.5" r="1.2"/>'),
+  info: svg('<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>'),
   table: svg('<path d="M6 3v7a2 2 0 0 0 2 2v9"/><path d="M10 3v7a2 2 0 0 1-2 2"/><path d="M8 3v5"/><path d="M17 21V3c-2.5 1.5-3.5 4.5-3.5 8 0 1.5 1 2 2 2h1.5"/>'),
   sliders: svg('<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>'),
   logout: svg('<path d="M9 4H5v16h4M16 8l4 4-4 4M20 12H9"/>'),
@@ -288,6 +289,7 @@ function startListeners() {
     S.settings = s.exists ? s.data() : {};
     S.loaded.settings = true;
     applyBrand();
+    renderShopSwitch();
     if (S.page === "settings" && !S.settingsTouched) renderPage();
   }, err));
 
@@ -348,7 +350,12 @@ function refresh(full) {
   if (S.page === "menu" && !full && $("#menuList")) { renderMenuList(); return; }
   renderPage();
 }
+setInterval(() => { // status sesi/jam buka berubah seiring waktu
+  renderShopSwitch();
+  if (S.page === "tables" || S.page === "dashboard") renderPage();
+}, 30000);
 function updateBadge() {
+  renderShopSwitch();
   const n = S.orders.filter((o) => o.status === "baru").length;
   const b = $("#badgeOrders");
   b.hidden = n === 0;
@@ -393,6 +400,48 @@ const closeSide = () => { $("#side").classList.remove("open"); $("#sideBg").clas
 /* =========================================
    DASHBOARD
    ========================================= */
+/* =========================================
+   SESI MEJA & JAM BUKA (rumus sama dengan firestore.rules & session.js)
+   ========================================= */
+const GUEST_MS = 15 * 60 * 1000;
+const DAY_NAMES = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0]; // tampil Senin..Minggu
+const DEFAULT_SCHEDULE = () => Array.from({ length: 7 }, () => ({ open: true, from: 480, to: 1320 }));
+const mm = (n) => String(Math.floor(n / 60)).padStart(2, "0") + ":" + String(n % 60).padStart(2, "0");
+const toMin = (v) => { const m = /^(\d{2}):(\d{2})$/.exec(v || ""); return m ? +m[1] * 60 + +m[2] : NaN; };
+const tms = (v) => (v && v.toMillis ? v.toMillis() : 0);
+const sessMinutes = () => Number((S.settings || {}).sessionMinutes) || 120;
+
+function sessEnd(t) { // waktu berakhir sesi (ms) atau 0 bila tidak hidup
+  if (!t || !t.sessionId) return 0;
+  const end = Math.max(tms(t.sessionOpenedAt) ? tms(t.sessionOpenedAt) + GUEST_MS : 0, tms(t.sessionUntil));
+  return end > Date.now() ? end : 0;
+}
+
+function shopStatus() {
+  const c = S.settings || {};
+  if (c.acceptOrders === false) return { open: false, text: "Tutup sementara (manual)" };
+  if (Array.isArray(c.schedule) && c.schedule.length === 7) {
+    const t = Date.now() + (typeof c.tzOffset === "number" ? c.tzOffset : 420) * 60000;
+    const wd = (Math.floor(t / 86400000) + 4) % 7, mins = (t % 86400000) / 60000;
+    const d = c.schedule[wd];
+    if (!(d && d.open === true && mins >= d.from && mins < d.to)) return { open: false, text: "Di luar jam buka" };
+  }
+  return { open: true, text: "Menerima pesanan" };
+}
+
+function renderShopSwitch() {
+  const b = $("#shopSwitch");
+  if (!b) return;
+  const manualOn = (S.settings || {}).acceptOrders !== false;
+  const st = shopStatus();
+  b.className = "shop-switch " + (st.open ? "on" : "off");
+  b.innerHTML = `<span class="sw"><input type="checkbox" tabindex="-1" ${manualOn ? "checked" : ""}><i></i></span><span class="shop-txt"><b>${st.open ? "Buka" : "Tutup"}</b><small>${esc(st.text)}</small></span>`;
+  const first = S.tables[0];
+  const link = $("#appLink");
+  if (link) link.href = "index.html" + (first ? "?meja=" + encodeURIComponent(first.id) : "");
+}
+
 function pgDashboard() {
   const valid = S.orders.filter((o) => o.status !== "dibatalkan");
   const today = valid.filter((o) => isToday(toDate(o.createdAt)));
@@ -415,6 +464,7 @@ function pgDashboard() {
       <div class="card stat"><div class="stat-ic g">${ic("wallet")}</div><div><small>Pendapatan hari ini</small><b>${rupiah(revenue)}</b></div></div>
       <div class="card stat"><div class="stat-ic o">${ic("bell")}</div><div><small>Pesanan baru</small><b>${baru}</b></div></div>
       <div class="card stat"><div class="stat-ic b">${ic("coffee")}</div><div><small>Menu aktif</small><b>${aktif}<span class="muted sm"> / ${S.menu.length}</span></b></div></div>
+      <div class="card stat"><div class="stat-ic g">${ic("table")}</div><div><small>Meja terisi</small><b>${S.tables.filter((t) => sessEnd(t)).length}<span class="muted sm"> / ${S.tables.length}</span></b></div></div>
     </div>
     <div class="dash-cols">
       <div class="card pad">
@@ -436,6 +486,18 @@ function pgDashboard() {
 /* =========================================
    PESANAN
    ========================================= */
+function orderFeeHTML(o) {
+  const f = o.fee || {};
+  const calc = (o.items || []).reduce((a, i) => a + (i.price || 0) * (i.qty || 0), 0);
+  const warn = calc !== (o.total || 0)
+    ? `<div class="order-warn">${ic("info")}Total (${rupiah(o.total)}) tidak sama dengan jumlah harga item (${rupiah(calc)}). Periksa sebelum memproses.</div>` : "";
+  const parts = [];
+  if (f.service) parts.push(`Layanan ${f.sRate}%: ${rupiah(f.service)}`);
+  if (f.tax) parts.push(`Pajak ${f.tRate}%: ${rupiah(f.tax)}`);
+  const fee = parts.length ? `<div class="order-fee">Sudah termasuk &middot; ${parts.join(" &middot; ")} &middot; sebelum layanan &amp; pajak: ${rupiah(f.base)}</div>` : "";
+  return fee + warn;
+}
+
 function orderCard(o) {
   const st = STATUS[o.status] || STATUS.baru;
   const next = NEXT[o.status];
@@ -447,6 +509,7 @@ function orderCard(o) {
     </div>
     <ul class="order-items">${(o.items || []).map((i) => `<li><span>${i.qty}x ${esc(i.name)}</span><span>${rupiah((i.price || 0) * (i.qty || 0))}</span></li>`).join("")}</ul>
     ${o.note ? `<div class="order-note">Catatan: ${esc(o.note)}</div>` : ""}
+    ${orderFeeHTML(o)}
     <div class="order-foot">
       <b>${rupiah(o.total)}</b>
       <div class="actions">
@@ -697,6 +760,9 @@ function pgTables() {
     </div></div>
     ${S.tables.length ? `<div class="tgrid">${S.tables.map((t) => `<div class="card tcard">
       <div class="t-ic">${ic("table")}</div><b>${esc(t.name)}</b><span class="chip-area">${esc(t.area || "-")}</span>
+      ${(() => { const e = sessEnd(t); return e
+        ? `<span class="t-state busy">Terisi &middot; s/d ${hhmm(new Date(e))}</span><button class="btn ghost sm" data-act="clear-table" data-id="${t.id}">Kosongkan meja</button>`
+        : `<span class="t-state free">Kosong</span>`; })()}
       <div class="t-act">
         <button class="icon-btn" data-act="qr-table" data-id="${t.id}" aria-label="Lihat QR">${ic("qr")}</button>
         <button class="icon-btn" data-act="print-table" data-id="${t.id}" aria-label="Cetak QR">${ic("printer")}</button>
@@ -935,9 +1001,22 @@ function pgSettings() {
         ${field("Badge", `<input name="badge" maxlength="30" value="${esc(s.badge || "")}" placeholder="Demo POS Basic">`, "Label kecil hijau di atas nama outlet")}
       </div>
       ${field("Tagline", `<input name="tagline" maxlength="100" value="${esc(s.tagline || "")}" placeholder="Nikmati kopi terbaik untuk menemani harimu">`)}
-      <div class="grid2">
-        ${field("Jam buka", `<input name="jamBuka" maxlength="30" value="${esc(s.jamBuka || "")}" placeholder="08.00 - 22.00">`)}
-        ${field("Durasi sesi", `<input name="sesi" maxlength="20" value="${esc(s.sesi || "")}" placeholder="2 jam">`)}
+      <div class="section-sep">
+        <div class="section-title">Jam buka &amp; sesi meja</div>
+        <p class="muted sm" style="margin:-4px 0 12px;line-height:1.5">Di luar jam buka, pelanggan hanya bisa melihat menu. Saklar Buka/Tutup di bagian atas halaman menutup pemesanan secara manual.</p>
+        ${scheduleHTML(s)}
+        <div class="grid2">
+          ${field("Zona waktu", `<select name="tzOffset"><option value="420" ${(s.tzOffset ?? 420) === 420 ? "selected" : ""}>WIB (UTC+7)</option><option value="480" ${s.tzOffset === 480 ? "selected" : ""}>WITA (UTC+8)</option><option value="540" ${s.tzOffset === 540 ? "selected" : ""}>WIT (UTC+9)</option></select>`)}
+          ${field("Durasi sesi setelah pesanan diproses (menit)", `<input name="sessionMinutes" type="number" min="15" max="720" step="5" value="${s.sessionMinutes ?? 120}">`, "Pelanggan punya 15 menit untuk memesan pertama kali setelah scan QR. Setelah pesanan diproses, sesi diperpanjang selama durasi ini.")}
+        </div>
+      </div>
+      <div class="section-sep">
+        <div class="section-title">Pajak &amp; biaya layanan</div>
+        <p class="muted sm" style="margin:-4px 0 12px;line-height:1.5">Harga menu dianggap SUDAH termasuk pajak dan layanan. Angka ini hanya dipakai untuk menampilkan rincian, tidak menambah total. Isi 0 untuk menyembunyikan.</p>
+        <div class="grid2">
+          ${field("Biaya layanan (%)", `<input name="serviceRate" type="number" min="0" max="30" step="0.5" value="${s.serviceRate ?? 0}">`)}
+          ${field("Pajak (%)", `<input name="taxRate" type="number" min="0" max="30" step="0.5" value="${s.taxRate ?? 0}">`)}
+        </div>
       </div>
       ${imageField("Gambar hero (header aplikasi)", "Disarankan gambar landscape. Maksimal 8 MB.", "hero")}
       <div class="section-sep">
@@ -953,6 +1032,14 @@ function pgSettings() {
       <p class="muted" style="margin-bottom:14px;line-height:1.55">Tambahkan pengaturan outlet, kategori, menu, dan 10 meja contoh ke Firestore. Cocok untuk uji coba awal.</p>
       <button class="btn ghost" data-act="seed">${ic("db")}Impor data dummy</button>
     </div>`;
+}
+function scheduleHTML(s) {
+  const sch = Array.isArray(s.schedule) && s.schedule.length === 7 ? s.schedule : DEFAULT_SCHEDULE();
+  return `<div class="sched">${DAY_ORDER.map((i) => {
+    const d = sch[i];
+    return `<div class="sched-row"><label class="tog"><span class="sw"><input type="checkbox" name="d${i}_open" ${d.open ? "checked" : ""}><i></i></span><b>${DAY_NAMES[i]}</b></label>
+      <input type="time" name="d${i}_from" value="${mm(d.from)}"><span class="muted">sampai</span><input type="time" name="d${i}_to" value="${mm(d.to)}"></div>`;
+  }).join("")}</div>`;
 }
 function mountSettings() {
   const s = S.settings || {};
@@ -1110,7 +1197,8 @@ async function seedDummy() {
     const b = db.batch();
     b.set(db.doc("settings/outlet"), {
       name: OUTLET.name, tagline: OUTLET.tagline, badge: OUTLET.badge, brandName: OUTLET.brandName || "",
-      jamBuka: OUTLET.jamBuka, sesi: OUTLET.sesi, heroImg: OUTLET.heroImg
+      jamBuka: OUTLET.jamBuka, sesi: OUTLET.sesi, heroImg: OUTLET.heroImg,
+      acceptOrders: true, tzOffset: 420, schedule: DEFAULT_SCHEDULE(), sessionMinutes: 120, serviceRate: 5, taxRate: 10
     }, { merge: true });
     CATEGORIES.filter((c) => c !== "Semua").forEach((name, i) => b.set(db.collection("categories").doc(), { name, order: i + 1 }));
     MENU.forEach((m, i) => b.set(db.collection("menu").doc(), {
@@ -1147,8 +1235,35 @@ document.addEventListener("click", async (e) => {
 
     case "filter-status": S.filterStatus = el.dataset.key; renderPage(); break;
     case "status":
-      try { await db.collection("orders").doc(id).update({ status: el.dataset.to, updatedAt: TS() }); }
-      catch (ex) { toast(errMsg(ex)); }
+      try {
+        const o = S.orders.find((x) => x.id === id);
+        const b = db.batch();
+        b.update(db.collection("orders").doc(id), { status: el.dataset.to, updatedAt: TS() });
+        // Proses -> perpanjang sesi meja (hanya bila pesanan ini milik sesi yang sedang berjalan)
+        if (el.dataset.to === "diproses" && o && o.mejaId && o.sessionId) {
+          const t = S.tables.find((x) => x.id === o.mejaId);
+          if (t && t.sessionId === o.sessionId && sessEnd(t)) {
+            const until = Math.max(Date.now() + sessMinutes() * 60000, tms(t.sessionUntil));
+            b.update(db.collection("tables").doc(t.id), { sessionUntil: firebase.firestore.Timestamp.fromMillis(until) });
+          }
+        }
+        await b.commit();
+      } catch (ex) { toast(errMsg(ex)); }
+      break;
+    case "clear-table": {
+      const t = S.tables.find((x) => x.id === id);
+      if (t && await confirmBox({ title: "Kosongkan meja", text: `Sesi ${t.name} diakhiri. Pelanggan di meja ini tidak bisa memesan lagi sampai ada yang scan QR.`, ok: "Kosongkan", danger: true })) {
+        try { await db.collection("tables").doc(id).update({ sessionId: "", sessionOpenedAt: null, sessionUntil: null }); toast(t.name + " dikosongkan."); }
+        catch (ex) { toast(errMsg(ex)); }
+      }
+      break;
+    }
+    case "toggle-shop":
+      try {
+        const next = (S.settings || {}).acceptOrders === false;
+        await db.doc("settings/outlet").set({ acceptOrders: next, updatedAt: TS() }, { merge: true });
+        toast(next ? "Kedai membuka pesanan." : "Pesanan ditutup sementara.");
+      } catch (ex) { toast(errMsg(ex)); }
       break;
     case "del-order":
       if (await confirmBox({ title: "Hapus pesanan", text: "Pesanan ini akan dihapus permanen.", ok: "Hapus", danger: true })) {
@@ -1239,9 +1354,22 @@ document.addEventListener("submit", async (e) => {
   const fd = new FormData(e.target);
   const appUrl = (fd.get("appUrl") || "").trim();
   if (appUrl && !/^https?:\/\//i.test(appUrl)) { toast("Alamat aplikasi harus diawali http:// atau https://"); return; }
+  const schedule = [];
+  for (let i = 0; i < 7; i++) {
+    const from = toMin(fd.get(`d${i}_from`)), to = toMin(fd.get(`d${i}_to`));
+    const open = fd.get(`d${i}_open`) === "on";
+    if (open && (isNaN(from) || isNaN(to) || to <= from)) { toast(`Jam buka ${DAY_NAMES[i]} tidak valid (jam tutup harus setelah jam buka; buka lewat tengah malam belum didukung).`); return; }
+    schedule.push({ open, from: isNaN(from) ? 480 : from, to: isNaN(to) ? 1320 : to });
+  }
+  const sessionMinutes = Math.round(Number(fd.get("sessionMinutes")));
+  const serviceRate = Number(fd.get("serviceRate")), taxRate = Number(fd.get("taxRate"));
+  if (!(sessionMinutes >= 15 && sessionMinutes <= 720)) { toast("Durasi sesi harus 15 sampai 720 menit."); return; }
+  if (!(serviceRate >= 0 && serviceRate <= 30 && taxRate >= 0 && taxRate <= 30)) { toast("Pajak dan layanan harus 0 sampai 30 persen."); return; }
+  const open0 = schedule.find((d) => d.open);
   const data = {
     name: fd.get("name").trim(), badge: fd.get("badge").trim(), tagline: fd.get("tagline").trim(),
-    jamBuka: fd.get("jamBuka").trim(), sesi: fd.get("sesi").trim(),
+    schedule, tzOffset: Number(fd.get("tzOffset")), sessionMinutes, serviceRate, taxRate,
+    jamBuka: open0 ? `${mm(open0.from).replace(":", ".")} - ${mm(open0.to).replace(":", ".")}` : "Tutup",
     heroImg: S.ups.hero.url, logo: S.ups.logo.url,
     brandName: fd.get("brandName").trim(), appUrl,
     updatedAt: TS()

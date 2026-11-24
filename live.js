@@ -230,6 +230,7 @@ const Live = (() => {
   async function sendChat(raw) {
     const text = String(raw || "").trim().slice(0, 500);
     if (!text || !hasDb) return;
+    if (!Session.canChat()) { toast("Sesi meja berakhir. Scan ulang QR untuk chat.", "warn", "info"); return; }
     if (!chat.id) { chat.id = "c" + rid(16); saveChat(); }
     watchChat(); // pasang listener dulu agar pesan langsung tampil
     const ref = db.collection("chats").doc(chat.id);
@@ -239,6 +240,7 @@ const Live = (() => {
       const batch = db.batch();
       batch.set(ref, {
         mejaId: TABLE.id || "",
+        sessionId: Session.sid() || "",
         mejaName: OUTLET.meja || "",
         area: OUTLET.area || "",
         lastMessage: text.slice(0, 100),
@@ -251,16 +253,35 @@ const Live = (() => {
       if (!chat.created) { chat.created = true; saveChat(); }
     } catch (e) {
       console.error(e);
-      toast("Pesan gagal terkirim. Coba lagi.", "warn", "x");
+      toast(e && e.code === "permission-denied" ? "Sesi meja berakhir. Scan ulang QR untuk chat." : "Pesan gagal terkirim. Coba lagi.", "warn", "x");
     } finally {
       btn.disabled = false;
     }
   }
 
+  /* ---------- Sesi meja ---------- */
+  // Pelanggan baru di meja ini: hapus riwayat pelanggan sebelumnya (notifikasi, pesanan terlacak, chat)
+  function reset() {
+    Object.keys(orderUnsubs).forEach(stopOrder);
+    if (chatUnsub) { chatUnsub(); chatUnsub = null; }
+    notifs = []; orders = {}; msgs = [];
+    chat = { id: "", created: false, lastRead: 0, seenAt: 0 };
+    saveNotifs(); saveOrders(); saveChat();
+    renderBell(); renderFab(); renderChat(); renderNotifs();
+  }
+
+  function onSessionChange() {
+    if (Session.changedSince("outletmu_live_sid")) reset();
+    $("#fabWrap").hidden = !(hasDb && Session.canChat());
+    if (!Session.canChat() && isOpen("chatSheet")) closeSheet();
+  }
+
   /* ---------- Mulai ---------- */
   function init() {
     hydrateIcons();
-    $("#fabWrap").hidden = !hasDb; // chat butuh Firestore
+    if (Session.changedSince("outletmu_live_sid")) reset();
+    $("#fabWrap").hidden = !(hasDb && Session.canChat()); // chat butuh Firestore + sesi meja aktif
+    Session.onChange(onSessionChange);
     renderBell();
     renderFab();
 

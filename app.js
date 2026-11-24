@@ -68,9 +68,10 @@ function renderOutlet() {
   $("#outletTagline").textContent = OUTLET.tagline;
   $(".badge").textContent = OUTLET.badge;
   $("#infoMeja").textContent = OUTLET.meja;
-  $("#infoJam").textContent = OUTLET.jamBuka;
+  $("#infoJam").textContent = Session.hoursText() || OUTLET.jamBuka;
   $("#infoArea").textContent = OUTLET.area;
-  $("#sessionText").textContent = OUTLET.sesi;
+  const sm = Number(REMOTE.cfg.sessionMinutes);
+  $("#sessionText").textContent = sm ? (sm % 60 === 0 ? sm / 60 + " jam" : sm + " menit") : OUTLET.sesi;
   $("#heroImg").style.backgroundImage = `url('${OUTLET.heroImg}')`;
 }
 
@@ -91,6 +92,12 @@ function visibleItems() {
 
 function actionHTML(m) {
   const qty = state.cart[m.id] || 0;
+  if (!Session.canOrder()) {
+    // mode lihat-saja: kedai tutup / sesi meja berakhir / bukan dari QR meja
+    return qty > 0
+      ? `<div class="qty-mini is-disabled"><span>${qty}</span></div>`
+      : `<button class="add-btn" disabled aria-disabled="true" aria-label="Pemesanan tidak tersedia">${icon("plus")}</button>`;
+  }
   if (qty > 0) {
     return `<div class="qty-mini">
       <button data-act="dec" data-id="${m.id}" aria-label="Kurangi">${icon("minus")}</button>
@@ -189,6 +196,7 @@ function renderCartBar(bump) {
 }
 
 function changeQty(id, delta) {
+  if (delta > 0 && !Session.canOrder()) { toast(Session.blockText(), "warn", "info"); return; }
   const next = (state.cart[id] || 0) + delta;
   if (next <= 0) delete state.cart[id]; else state.cart[id] = next;
   saveCart();
@@ -253,10 +261,40 @@ function renderSheet() {
       </div>`).join("") +
     `<textarea class="note" id="orderNote" rows="2" placeholder="Catatan pesanan (opsional)"></textarea>`;
 
+  const f = Session.fee(total);
+  const feeHTML = f ? `
+    <div class="fee-box">
+      <div class="fee-title">Rincian (sudah termasuk dalam harga)</div>
+      <div class="fee-row"><span>Harga sebelum layanan &amp; pajak</span><span>${rupiah(f.base)}</span></div>
+      ${f.sRate ? `<div class="fee-row"><span>Layanan ${f.sRate}%</span><span>${rupiah(f.service)}</span></div>` : ""}
+      ${f.tRate ? `<div class="fee-row"><span>Pajak ${f.tRate}%</span><span>${rupiah(f.tax)}</span></div>` : ""}
+    </div>` : "";
+  const block = Session.blockText();
   $("#sheetFoot").innerHTML = `
     <div class="row-sum"><span>Jumlah item</span><span>${count}</span></div>
     <div class="row-sum total"><span>Total</span><span>${rupiah(total)}</span></div>
-    <button class="btn-primary btn-block" id="btnOrder">Pesan Sekarang ${icon("arrow-right")}</button>`;
+    ${feeHTML}
+    ${block ? `<div class="sheet-block">${icon("info")}<span>${esc(block)}</span></div>` : ""}
+    <button class="btn-primary btn-block" id="btnOrder" ${block ? "disabled" : ""}>Pesan Sekarang ${icon("arrow-right")}</button>`;
+}
+
+/* Tampilan status (kedai tutup / sesi berakhir / bukan dari QR) */
+function renderStateBar() {
+  const t = Session.blockText();
+  const bar = $("#stateBar");
+  bar.hidden = !t;
+  bar.innerHTML = t ? icon("info") + `<span>${esc(t)}</span>` : "";
+}
+
+/* Dipanggil saat mode sesi / jam buka berubah */
+function onSession() {
+  if (Session.changedSince("outletmu_cart_sid")) { state.cart = {}; saveCart(); } // pelanggan baru di meja ini
+  renderOutlet();
+  renderStateBar();
+  renderMenu();
+  renderCartBar();
+  if ($("#sheet").classList.contains("show") && !orderDone) renderSheet();
+  hydrateIcons();
 }
 
 async function placeOrder() {
@@ -265,7 +303,8 @@ async function placeOrder() {
     .map(([id, qty]) => ({ m: findItem(id), qty }))
     .filter((e) => e.m);
   if (!entries.length) return;
-  const note = ($("#orderNote")?.value || "").trim().slice(0, 200);
+  if (!Session.canOrder()) { toast(Session.blockText(), "warn", "info"); return; }
+  const note =($("#orderNote")?.value || "").trim().slice(0, 200);
   const { count, total } = cartTotals();
   const code = "ORD-" + Date.now().toString().slice(-6);
   const meja = OUTLET.meja;
@@ -284,13 +323,17 @@ async function placeOrder() {
         total,
         note,
         status: "baru",
+        sessionId: Session.sid() || "",
+        fee: Session.fee(total) || {},
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
       orderId = ref.id;
     }
   } catch (e) {
     console.error(e);
-    toast("Gagal mengirim pesanan. Coba lagi.", "warn", "x");
+    toast(e && e.code === "permission-denied"
+      ? "Pesanan ditolak: sesi meja berakhir atau kedai sedang tutup."
+      : "Gagal mengirim pesanan. Coba lagi.", "warn", "x");
     if (btn) { btn.disabled = false; btn.innerHTML = "Pesan Sekarang " + icon("arrow-right"); }
     return;
   }
@@ -364,6 +407,7 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet
 
 /* ---------- Data dari Firestore (fallback ke data dummy) ---------- */
 const TABLE = { id: "", name: OUTLET.meja, area: OUTLET.area };
+const REMOTE = { cfg: {}, table: null, has: false }; // pengaturan outlet + meja hasil scan QR
 
 async function loadRemote() {
   if (typeof db === "undefined") return;
@@ -380,6 +424,7 @@ async function loadRemote() {
 
     if (sSnap.exists) {
       const s = sSnap.data();
+      REMOTE.cfg = s;
       ["name", "tagline", "badge", "jamBuka", "sesi", "heroImg"].forEach((k) => { if (s[k]) OUTLET[k] = s[k]; });
       // brandName & logo boleh dikosongkan dari admin (mis. logo sudah memuat nama brand)
       ["brandName", "logo"].forEach((k) => { if (typeof s[k] === "string") OUTLET[k] = s[k]; });
@@ -394,10 +439,16 @@ async function loadRemote() {
     const tables = tSnap.docs.map((d) => ({ id: d.id, ...d.data() })).sort(byOrder);
     if (tables.length) {
       const param = (new URLSearchParams(location.search).get("meja") || "").toLowerCase();
-      const t = tables.find((x) => x.id.toLowerCase() === param) || tables[0];
-      TABLE.id = t.id;
-      OUTLET.meja = t.name;
-      OUTLET.area = t.area || OUTLET.area;
+      REMOTE.has = true;
+      const t = tables.find((x) => x.id.toLowerCase() === param); // ketat: harus dari QR meja yang valid
+      if (t) {
+        REMOTE.table = t;
+        TABLE.id = t.id;
+        OUTLET.meja = t.name;
+        OUTLET.area = t.area || OUTLET.area;
+      } else {
+        OUTLET.meja = "-";
+      }
     }
 
     // Buang item keranjang yang sudah tidak ada di menu
@@ -413,10 +464,9 @@ async function init() {
   hydrateIcons();
   $("#menuGrid").innerHTML = '<div class="empty">Memuat menu...</div>';
   await Promise.race([loadRemote(), new Promise((r) => setTimeout(r, 5000))]);
-  renderOutlet();
+  await Session.start(REMOTE.cfg, REMOTE.table, REMOTE.has); // buka / ikut sesi meja
+  Session.onChange(onSession);
   renderChips();
-  renderMenu();
-  renderCartBar();
-  hydrateIcons();
+  onSession();
 }
 window.appReady = init(); // live.js menunggu ini sebelum memulai notifikasi & chat

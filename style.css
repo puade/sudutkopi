@@ -214,3 +214,17 @@ body.has-cart .chat-fab{bottom:calc(110px + env(safe-area-inset-bottom))}
 .chat-send{width:46px;height:46px;flex:0 0 46px;border-radius:50%;background:var(--green);color:#fff;display:grid;place-items:center}
 .chat-send svg{width:20px;height:20px}
 .chat-send:disabled{opacity:.5}
+
+/* ---------- Tahap 1: sesi meja, jam buka, rincian pajak ---------- */
+.state-bar{display:flex;align-items:flex-start;gap:8px;margin:10px 16px 0;padding:10px 12px;border-radius:12px;background:#fff4e5;color:#8a4b00;border:1px solid #f3d3a3;font-size:13px;font-weight:600;line-height:1.4}
+.state-bar svg{width:17px;height:17px;flex:0 0 17px;margin-top:1px}
+.state-bar[hidden]{display:none}
+.add-btn:disabled{background:#cfc7bf;opacity:.8;cursor:not-allowed}
+.qty-mini.is-disabled{background:#eee9e4}
+.qty-mini.is-disabled span{color:var(--muted);padding:0 8px}
+.btn-primary:disabled{background:#cfc7bf;box-shadow:none;cursor:not-allowed}
+.fee-box{background:var(--card);border:1px dashed var(--line);border-radius:12px;padding:10px 12px;margin:-4px 0 12px}
+.fee-title{font-size:11.5px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.3px}
+.fee-row{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted);margin-bottom:3px}
+.sheet-block{display:flex;gap:8px;align-items:flex-start;background:#fff4e5;color:#8a4b00;border-radius:10px;padding:9px 11px;font-size:12.5px;font-weight:600;margin-bottom:10px}
+.sheet-block svg{width:16px;height:16px;flex:0 0 16px;margin-top:1px}

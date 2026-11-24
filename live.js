@@ -9,7 +9,7 @@
 
 const Live = (() => {
   const KEY = { notif: "outletmu_notifs", orders: "outletmu_orders", chat: "outletmu_chat" };
-  const TERMINAL = ["selesai", "dibatalkan"];
+  const TERMINAL = ["selesai", "dibatalkan", "gagal", "kedaluwarsa"];
   const DAY = 24 * 60 * 60 * 1000;
   const hasDb = typeof db !== "undefined";
 
@@ -101,7 +101,13 @@ const Live = (() => {
     diproses: { kind: "proses", toast: "Pesananmu sedang diproses", ic: "cup", text: (o) => `Pesanan ${o.code} sedang disiapkan.` },
     siap: { kind: "antar", toast: "Pesanan sedang diantar", ic: "truck", text: (o) => `Pesanan ${o.code} sedang diantar ke ${o.meja}.` },
     selesai: { kind: "selesai", toast: "Pesanan selesai. Selamat menikmati!", ic: "check", text: (o) => `Pesanan ${o.code} sudah selesai.` },
-    dibatalkan: { kind: "batal", toast: "Pesanan dibatalkan oleh kasir", ic: "x", warn: true, text: (o) => `Pesanan ${o.code} dibatalkan. Hubungi admin lewat chat jika ada pertanyaan.` }
+    dibatalkan: { kind: "batal", toast: "Pesanan dibatalkan oleh kasir", ic: "x", warn: true, text: (o) => `Pesanan ${o.code} dibatalkan. Hubungi admin lewat chat jika ada pertanyaan.` },
+    // pembayaran di awal
+    verifikasi: { kind: "info", toast: "Bukti transfer sedang diproses", ic: "clock", text: (o) => `Bukti transfer pesanan ${o.code} sedang diperiksa admin.` },
+    terkirim: { kind: "selesai", toast: "Pesanan Terkirim", ic: "check", text: (o) => `Pembayaran ${o.code} diterima. Pesanan masuk ke dapur.` },
+    buktiDitolak: { kind: "batal", toast: "Bukti transfer ditolak", ic: "x", warn: true, text: (o) => `Bukti transfer ${o.code} ditolak. Buka pembayaran untuk kirim ulang.` },
+    gagal: { kind: "batal", toast: "Pesanan Gagal", ic: "x", warn: true, text: (o) => `Pesanan ${o.code} gagal: pembayaran tidak dapat diverifikasi.` },
+    kedaluwarsa: { kind: "batal", toast: "Waktu pembayaran habis", ic: "x", warn: true, text: (o) => `Pesanan ${o.code} dibatalkan karena waktu pembayaran habis.` }
   };
 
   // { [orderId]: { code, meja, status, ts } } - disimpan di perangkat ini
@@ -121,9 +127,13 @@ const Live = (() => {
   function onOrderStatus(id, status) {
     const rec = orders[id];
     if (!rec || rec.status === status) return;
+    const prev = rec.status;
     rec.status = status;
     saveOrders();
-    const m = ORDER_MSG[status];
+    let key = status;
+    if (status === "baru" && (prev === "menunggu_bayar" || prev === "verifikasi")) key = "terkirim";
+    if (status === "menunggu_bayar" && prev === "verifikasi") key = "buktiDitolak";
+    const m = ORDER_MSG[key];
     if (m) {
       toast(m.toast, m.warn ? "warn" : "ok", m.ic);
       addNotif(m.kind, m.toast, m.text(rec));
@@ -146,10 +156,12 @@ const Live = (() => {
   }
 
   function track(id, info) {
-    orders[id] = { code: info.code, meja: info.meja, status: "baru", ts: Date.now() };
+    const st = info.status || "baru";
+    orders[id] = { code: info.code, meja: info.meja, status: st, ts: Date.now() };
     saveOrders();
     watchOrder(id);
-    addNotif("info", "Pesanan terkirim", `Pesanan ${info.code} diterima dan menunggu diproses.`, true);
+    if (st === "menunggu_bayar") addNotif("info", "Menunggu pembayaran", `Pesanan ${info.code} dibuat. Selesaikan pembayaran agar pesanan diproses.`, true);
+    else addNotif("info", "Pesanan terkirim", `Pesanan ${info.code} diterima dan menunggu diproses.`, true);
   }
 
   /* =========================================
@@ -187,7 +199,7 @@ const Live = (() => {
       body.innerHTML = `<div class="chat-empty">${icon("chat")}<div>Ada yang bisa dibantu?<br>Tulis pesanmu, admin akan membalas di sini.</div></div>`;
     } else {
       body.innerHTML = msgs.map((m) =>
-        `<div class="msg ${m.from === "admin" ? "admin" : "me"}">${esc(m.text)}<small>${hhmm(m.ts)}</small></div>`).join("");
+        `<div class="msg ${m.from === "admin" ? "admin" : "me"}">${m.image ? `<a href="${esc(m.image)}" target="_blank" rel="noopener"><img class="msg-img" src="${esc(m.image)}" alt="Gambar"></a>` : ""}${esc(m.text)}<small>${hhmm(m.ts)}</small></div>`).join("");
     }
     if (stick) body.scrollTop = body.scrollHeight;
   }
@@ -199,7 +211,7 @@ const Live = (() => {
       .onSnapshot((snap) => {
         msgs = snap.docs.map((d) => {
           const x = d.data({ serverTimestamps: "estimate" });
-          return { id: d.id, from: x.from, text: x.text || "", ts: msgTime(x) };
+          return { id: d.id, from: x.from, text: x.text || "", image: x.image || "", ts: msgTime(x) };
         });
         const open = isOpen("chatSheet");
         const fresh = msgs.filter((m) => m.from === "admin" && m.ts > chat.seenAt);
@@ -259,6 +271,25 @@ const Live = (() => {
     }
   }
 
+  // Kirim gambar (bukti transfer) ke chat admin. Upaya terbaik: gagal tidak mengganggu pembayaran.
+  async function sendImage(url, text) {
+    if (!hasDb || !Session.canChat()) return;
+    try {
+      if (!chat.id) { chat.id = "c" + rid(16); saveChat(); }
+      watchChat();
+      const ref = db.collection("chats").doc(chat.id);
+      const batch = db.batch();
+      batch.set(ref, {
+        mejaId: TABLE.id || "", sessionId: Session.sid() || "", mejaName: OUTLET.meja || "", area: OUTLET.area || "",
+        lastMessage: String(text).slice(0, 100), lastAt: SV(), lastFrom: "user",
+        unreadAdmin: firebase.firestore.FieldValue.increment(1)
+      }, { merge: true });
+      batch.set(ref.collection("messages").doc(), { from: "user", text: String(text).slice(0, 500), image: url, createdAt: SV() });
+      await batch.commit();
+      if (!chat.created) { chat.created = true; saveChat(); }
+    } catch (e) { console.warn("Bukti tidak tersalin ke chat:", e.code || e.message); }
+  }
+
   /* ---------- Sesi meja ---------- */
   // Pelanggan baru di meja ini: hapus riwayat pelanggan sebelumnya (notifikasi, pesanan terlacak, chat)
   function reset() {
@@ -315,5 +346,5 @@ const Live = (() => {
 
   (window.appReady || Promise.resolve()).then(init);
 
-  return { track };
+  return { track, sendImage };
 })();

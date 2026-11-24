@@ -24,6 +24,9 @@ const ICONS = {
   send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>',
   truck: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.62l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>',
   cup: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V9z"/><path d="M17 10h1.5a2.5 2.5 0 0 1 0 5H17"/><path d="M8 3v3M12 3v3"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg>',
+  image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5-8 8"/></svg>',
   info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>'
 };
 const icon = (n) => ICONS[n] || "";
@@ -45,6 +48,7 @@ const state = {
   cat: "Semua",
   q: "",
   showAll: false,
+  payMethod: "transfer",
   cart: loadCart()
 };
 function loadCart() {
@@ -208,7 +212,16 @@ function changeQty(id, delta) {
 /* ---------- Sheet ---------- */
 let orderDone = false;
 
+function showSheetRaw() { // menampilkan panel keranjang tanpa merender ulang isinya (dipakai kartu pembayaran)
+  orderDone = true;
+  closeSheet();
+  $("#overlay").classList.add("show");
+  $("#sheet").classList.add("show");
+  $("#sheet").setAttribute("aria-hidden", "false");
+}
+
 function openSheet() {
+  if (typeof Pay !== "undefined") Pay.leave();
   orderDone = false;
   renderSheet();
   $("#overlay").classList.add("show");
@@ -216,6 +229,7 @@ function openSheet() {
   $("#sheet").setAttribute("aria-hidden", "false");
 }
 function closeSheet() {
+  if (typeof Pay !== "undefined" && $("#sheet").classList.contains("show")) Pay.onClose();
   // menutup semua panel (keranjang, notifikasi, chat)
   $("#overlay").classList.remove("show");
   document.querySelectorAll(".sheet").forEach((s) => {
@@ -269,11 +283,29 @@ function renderSheet() {
       ${f.sRate ? `<div class="fee-row"><span>Layanan ${f.sRate}%</span><span>${rupiah(f.service)}</span></div>` : ""}
       ${f.tRate ? `<div class="fee-row"><span>Pajak ${f.tRate}%</span><span>${rupiah(f.tax)}</span></div>` : ""}
     </div>` : "";
-  const block = Session.blockText();
+  const pc = Session.payConf();
+  let payHTML = "";
+  let block = Session.blockText();
+  if (pc.mode === "awal") {
+    const avail = [pc.transfer && "transfer", pc.cash && "cash"].filter(Boolean);
+    if (!avail.includes(state.payMethod)) state.payMethod = avail[0] || "";
+    if (!avail.length) { block = block || "Metode pembayaran belum tersedia. Hubungi kasir."; }
+    else {
+      const both = avail.length === 2;
+      payHTML = `<div class="pay-pick"><div class="pay-pick-label">Metode pembayaran</div>
+        <div class="pay-toggle ${both ? "" : "single"} ${state.payMethod === "cash" && both ? "right" : ""}">
+          <i class="pt-thumb"></i>
+          ${avail.map((m) => `<button type="button" data-pay="${m}" class="${state.payMethod === m ? "on" : ""}">${m === "transfer" ? "Transfer" : "Tunai"}</button>`).join("")}
+        </div>
+        <div class="pay-pick-note">${state.payMethod === "transfer" ? "Bayar lewat QRIS atau rekening, lalu unggah bukti transfer." : "Bayar di kasir dengan menunjukkan kode pesanan."}</div></div>`;
+    }
+  }
+  if (!block && typeof Pay !== "undefined" && Pay.active()) block = "Selesaikan dulu pembayaran pesanan sebelumnya.";
   $("#sheetFoot").innerHTML = `
     <div class="row-sum"><span>Jumlah item</span><span>${count}</span></div>
     <div class="row-sum total"><span>Total</span><span>${rupiah(total)}</span></div>
     ${feeHTML}
+    ${payHTML}
     ${block ? `<div class="sheet-block">${icon("info")}<span>${esc(block)}</span></div>` : ""}
     <button class="btn-primary btn-block" id="btnOrder" ${block ? "disabled" : ""}>Pesan Sekarang ${icon("arrow-right")}</button>`;
 }
@@ -304,6 +336,10 @@ async function placeOrder() {
     .filter((e) => e.m);
   if (!entries.length) return;
   if (!Session.canOrder()) { toast(Session.blockText(), "warn", "info"); return; }
+  if (typeof Pay !== "undefined" && Pay.active()) { toast("Selesaikan dulu pembayaran pesanan sebelumnya.", "warn", "info"); return; }
+  const pc = Session.payConf();
+  const awal = pc.mode === "awal";
+  if (awal && !state.payMethod) { toast("Pilih metode pembayaran.", "warn", "info"); return; }
   const note =($("#orderNote")?.value || "").trim().slice(0, 200);
   const { count, total } = cartTotals();
   const code = "ORD-" + Date.now().toString().slice(-6);
@@ -322,7 +358,8 @@ async function placeOrder() {
         count,
         total,
         note,
-        status: "baru",
+        status: awal ? "menunggu_bayar" : "baru",
+        ...(awal ? { payMethod: state.payMethod, proofs: [] } : {}),
         sessionId: Session.sid() || "",
         fee: Session.fee(total) || {},
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -338,12 +375,17 @@ async function placeOrder() {
     return;
   }
   // Pantau status pesanan ini (toast + notifikasi saat admin memproses / mengantar)
-  if (orderId && typeof Live !== "undefined") Live.track(orderId, { code, meja });
+  if (orderId && typeof Live !== "undefined") Live.track(orderId, { code, meja, status: awal ? "menunggu_bayar" : "baru" });
   state.cart = {};
   saveCart();
   orderDone = true;
   renderMenu();
   renderCartBar();
+  if (awal && orderId && typeof Pay !== "undefined") {
+    Pay.begin({ id: orderId, code, total, method: state.payMethod, meja });
+    Pay.open(); // tampilkan kartu pembayaran (QRIS/rekening atau Bayar di Kasir)
+    return;
+  }
   $("#sheetTitle").textContent = "Pesanan Terkirim";
   $("#sheetBody").innerHTML = `
     <div class="done">
@@ -379,6 +421,8 @@ document.addEventListener("click", (e) => {
     renderMenu();
     return;
   }
+  const pm = e.target.closest("[data-pay]");
+  if (pm) { state.payMethod = pm.dataset.pay; renderSheet(); hydrateIcons(); return; }
   const act = e.target.closest("[data-act]");
   if (act) {
     const id = act.dataset.id;

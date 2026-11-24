@@ -86,8 +86,16 @@ const STATUS = {
   diproses: { label: "Diproses", cls: "st-proses" },
   siap: { label: "Siap", cls: "st-siap" },
   selesai: { label: "Selesai", cls: "st-selesai" },
-  dibatalkan: { label: "Dibatalkan", cls: "st-batal" }
+  dibatalkan: { label: "Dibatalkan", cls: "st-batal" },
+  menunggu_bayar: { label: "Menunggu bayar", cls: "st-baru" },
+  verifikasi: { label: "Verifikasi bukti", cls: "st-proses" },
+  gagal: { label: "Gagal", cls: "st-batal" },
+  kedaluwarsa: { label: "Kedaluwarsa", cls: "st-selesai" }
 };
+const COUNTED = ["baru", "diproses", "siap", "selesai"]; // status yang dihitung sebagai penjualan (sudah dibayar / masuk dapur)
+const PAY_TRANSFER_MS = 15 * 60000, PAY_CASH_MS = 30 * 60000, MAX_PROOF = 3;
+const payDeadline = (o) => { const c = toDate(o.createdAt); return c ? c.getTime() + (o.payMethod === "cash" ? PAY_CASH_MS : PAY_TRANSFER_MS) : 0; };
+const mmss = (n) => { n = Math.max(0, Math.ceil(n / 1000)); return String(Math.floor(n / 60)).padStart(2, "0") + ":" + String(n % 60).padStart(2, "0"); };
 const NEXT = { baru: ["diproses", "Proses"], diproses: ["siap", "Tandai siap"], siap: ["selesai", "Selesaikan"] };
 
 function errMsg(e) {
@@ -334,6 +342,8 @@ function startListeners() {
       snap.docChanges().forEach((c) => {
         const o = c.doc.data();
         if (c.type === "added" && o.status === "baru") { beep(); toast("Pesanan baru dari " + (o.mejaName || "pelanggan")); }
+        if (c.type === "added" && o.status === "menunggu_bayar" && o.payMethod === "cash") { beep(); toast("Pelanggan akan bayar tunai: " + (o.mejaName || "")); }
+        if (c.type === "modified" && o.status === "verifikasi") { beep(); toast("Bukti transfer masuk dari " + (o.mejaName || "pelanggan")); }
       });
     }
     S.orders = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -352,11 +362,13 @@ function refresh(full) {
 }
 setInterval(() => { // status sesi/jam buka berubah seiring waktu
   renderShopSwitch();
-  if (S.page === "tables" || S.page === "dashboard") renderPage();
+  if (S.page === "tables" || S.page === "dashboard" || (S.page === "orders" && !$("#modalRoot").classList.contains("show"))) renderPage();
 }, 30000);
+// pesanan yang menunggu tindakan kasir/admin
+const needsAction = (o) => o.status === "baru" || o.status === "verifikasi" || (o.status === "menunggu_bayar" && o.payMethod === "cash");
 function updateBadge() {
   renderShopSwitch();
-  const n = S.orders.filter((o) => o.status === "baru").length;
+  const n = S.orders.filter((o) => needsAction(o)).length;
   const b = $("#badgeOrders");
   b.hidden = n === 0;
   b.textContent = n;
@@ -443,7 +455,7 @@ function renderShopSwitch() {
 }
 
 function pgDashboard() {
-  const valid = S.orders.filter((o) => o.status !== "dibatalkan");
+  const valid = S.orders.filter((o) => COUNTED.includes(o.status));
   const today = valid.filter((o) => isToday(toDate(o.createdAt)));
   const revenue = today.reduce((a, o) => a + (o.total || 0), 0);
   const baru = S.orders.filter((o) => o.status === "baru").length;
@@ -498,10 +510,35 @@ function orderFeeHTML(o) {
   return fee + warn;
 }
 
+function orderPayHTML(o) {
+  if (!o.payMethod) return "";
+  const proofs = (o.proofs || []).map((p) => `<a href="${esc(p.url)}" target="_blank" rel="noopener" title="${fmtDT(new Date(p.at))}"><img class="proof-img" src="${esc(p.url)}" alt="Bukti transfer"></a>`).join("");
+  let line = "";
+  if (o.status === "menunggu_bayar") {
+    const left = payDeadline(o) - Date.now();
+    line = o.payMethod === "cash"
+      ? `Menunggu pembayaran tunai di kasir &middot; sisa ${mmss(left)}`
+      : `Menunggu bukti transfer &middot; sisa ${mmss(left)}${o.payNote ? ` &middot; ditolak: ${esc(o.payNote)}` : ""}`;
+  } else if (o.status === "verifikasi") line = `Bukti transfer ${(o.proofs || []).length}/${MAX_PROOF} menunggu verifikasi`;
+  else if (o.status === "gagal") line = `Ditolak: ${esc(o.payNote || "-")}`;
+  else if (o.payStatus === "lunas") {
+    line = o.payMethod === "cash" && o.cashGiven ? `Tunai diterima ${rupiah(o.cashGiven)} &middot; kembalian ${rupiah(o.change || 0)}` : "Pembayaran lunas";
+  }
+  const refund = o.refundStatus === "perlu"
+    ? `<div class="refund-box"><b>Perlu refund ${rupiah(o.refundAmount || 0)}</b><span>${esc(o.refundNote || "")}</span><button class="btn primary sm" data-act="refund-done" data-id="${o.id}">Tandai sudah direfund</button></div>`
+    : o.refundStatus === "selesai" ? `<div class="order-fee">Refund ${rupiah(o.refundAmount || 0)} sudah dikembalikan.</div>` : "";
+  return `<div class="order-pay"><span class="tag ${o.payMethod === "cash" ? "o" : ""}">${o.payMethod === "cash" ? "Tunai" : "Transfer"}</span> <span class="muted sm">${line}</span>
+    ${proofs ? `<div class="proofs">${proofs}</div>` : ""}</div>${refund}`;
+}
+
 function orderCard(o) {
   const st = STATUS[o.status] || STATUS.baru;
   const next = NEXT[o.status];
-  const canCancel = ["baru", "diproses", "siap"].includes(o.status);
+  const canCancel = ["baru", "diproses", "siap", "menunggu_bayar", "verifikasi"].includes(o.status);
+  const payActs = o.status === "verifikasi"
+    ? `<button class="btn primary sm" data-act="pay-approve" data-id="${o.id}">Setujui</button><button class="btn ghost sm" data-act="pay-reject" data-id="${o.id}">Tolak</button>`
+    : o.status === "menunggu_bayar" && o.payMethod === "cash"
+      ? `<button class="btn primary sm" data-act="cash-accept" data-id="${o.id}">Terima tunai</button>` : "";
   return `<article class="card order">
     <div class="order-head">
       <div><b>${esc(o.code || o.id)}</b><div class="muted sm">${esc(o.mejaName || "-")} &middot; ${fmtDT(toDate(o.createdAt))}</div></div>
@@ -510,11 +547,13 @@ function orderCard(o) {
     <ul class="order-items">${(o.items || []).map((i) => `<li><span>${i.qty}x ${esc(i.name)}</span><span>${rupiah((i.price || 0) * (i.qty || 0))}</span></li>`).join("")}</ul>
     ${o.note ? `<div class="order-note">Catatan: ${esc(o.note)}</div>` : ""}
     ${orderFeeHTML(o)}
+    ${orderPayHTML(o)}
     <div class="order-foot">
       <b>${rupiah(o.total)}</b>
       <div class="actions">
+        ${payActs}
         ${next ? `<button class="btn primary sm" data-act="status" data-id="${o.id}" data-to="${next[0]}">${next[1]}</button>` : ""}
-        ${canCancel ? `<button class="btn ghost sm" data-act="status" data-id="${o.id}" data-to="dibatalkan">Batalkan</button>` : ""}
+        ${canCancel ? `<button class="btn ghost sm" data-act="cancel-order" data-id="${o.id}">Batalkan</button>` : ""}
         <button class="icon-btn danger" data-act="del-order" data-id="${o.id}" aria-label="Hapus">${ic("trash")}</button>
       </div>
     </div>
@@ -522,11 +561,16 @@ function orderCard(o) {
 }
 
 function pgOrders() {
-  const keys = ["semua", "baru", "diproses", "siap", "selesai", "dibatalkan"];
-  const count = (k) => (k === "semua" ? S.orders.length : S.orders.filter((o) => o.status === k).length);
-  const list = S.filterStatus === "semua" ? S.orders : S.orders.filter((o) => o.status === S.filterStatus);
+  const count = (k) => (k === "semua" ? S.orders.length : k === "refund" ? S.orders.filter((o) => o.refundStatus === "perlu").length : S.orders.filter((o) => o.status === k).length);
+  const core = ["semua", "baru", "diproses", "siap", "selesai", "dibatalkan"];
+  const extra = ["menunggu_bayar", "verifikasi", "gagal", "kedaluwarsa", "refund"].filter((k) => count(k) > 0 || S.filterStatus === k);
+  const keys = [...core.slice(0, 2), ...extra.filter((k) => k === "menunggu_bayar" || k === "verifikasi"), ...core.slice(2), ...extra.filter((k) => k === "gagal" || k === "kedaluwarsa"), ...extra.filter((k) => k === "refund")];
+  const label = (k) => (k === "semua" ? "Semua" : k === "refund" ? "Perlu refund" : STATUS[k].label);
+  const list = S.filterStatus === "semua" ? S.orders
+    : S.filterStatus === "refund" ? S.orders.filter((o) => o.refundStatus === "perlu")
+    : S.orders.filter((o) => o.status === S.filterStatus);
   return `<div class="pills">${keys.map((k) =>
-    `<button class="pill ${S.filterStatus === k ? "active" : ""}" data-act="filter-status" data-key="${k}">${k === "semua" ? "Semua" : STATUS[k].label}<em>${count(k)}</em></button>`).join("")}</div>
+    `<button class="pill ${S.filterStatus === k ? "active" : ""}" data-act="filter-status" data-key="${k}">${label(k)}<em>${count(k)}</em></button>`).join("")}</div>
     ${list.length ? `<div class="orders">${list.map(orderCard).join("")}</div>` : `<div class="card">${emptyBox("receipt", "Tidak ada pesanan.")}</div>`}`;
 }
 
@@ -1011,6 +1055,21 @@ function pgSettings() {
         </div>
       </div>
       <div class="section-sep">
+        <div class="section-title">Pembayaran</div>
+        <p class="muted sm" style="margin:-4px 0 12px;line-height:1.5">Satu mode untuk semua meja. Pada mode "bayar di awal", pesanan baru masuk ke dapur setelah pembayaran diterima.</p>
+        ${field("Mode pembayaran", `<select name="payMode"><option value="akhir" ${s.payMode !== "awal" ? "selected" : ""}>Langsung ke dapur (tanpa bayar di aplikasi)</option><option value="awal" ${s.payMode === "awal" ? "selected" : ""}>Bayar di awal (Transfer / Tunai)</option></select>`)}
+        <div class="field"><label>Metode yang tersedia</label>
+          <label class="tog"><span class="sw"><input type="checkbox" name="payTransfer" ${s.payTransfer !== false ? "checked" : ""}><i></i></span>Transfer (QRIS / rekening)</label>
+          <label class="tog" style="margin-top:8px"><span class="sw"><input type="checkbox" name="payCash" ${s.payCash !== false ? "checked" : ""}><i></i></span>Tunai di kasir</label>
+        </div>
+        ${imageField("Gambar QRIS kedai", "Foto/gambar QRIS statis. Tampil di kartu pembayaran pelanggan.", "qris", true)}
+        <div class="grid2">
+          ${field("Nama bank / e-wallet", `<input name="bankName" maxlength="30" value="${esc(s.bankName || "")}" placeholder="BCA">`)}
+          ${field("Nomor rekening", `<input name="accNo" maxlength="30" inputmode="numeric" value="${esc(s.accNo || "")}" placeholder="1234567890">`)}
+        </div>
+        ${field("Atas nama", `<input name="accName" maxlength="40" value="${esc(s.accName || "")}" placeholder="Nama pemilik rekening">`)}
+      </div>
+      <div class="section-sep">
         <div class="section-title">Pajak &amp; biaya layanan</div>
         <p class="muted sm" style="margin:-4px 0 12px;line-height:1.5">Harga menu dianggap SUDAH termasuk pajak dan layanan. Angka ini hanya dipakai untuk menampilkan rincian, tidak menambah total. Isi 0 untuk menyembunyikan.</p>
         <div class="grid2">
@@ -1045,7 +1104,8 @@ function mountSettings() {
   const s = S.settings || {};
   S.ups = {
     hero: bindUploader($("#page"), s.heroImg, 1200, "hero"),
-    logo: bindUploader($("#page"), s.logo, 400, "logo")
+    logo: bindUploader($("#page"), s.logo, 400, "logo"),
+    qris: bindUploader($("#page"), s.qrisUrl, 900, "qris")
   };
 }
 
@@ -1112,7 +1172,7 @@ function renderMsgs(force) {
   if (!el) return;
   const stick = force || el.scrollHeight - el.scrollTop - el.clientHeight < 90;
   el.innerHTML = S.chatMsgs.length
-    ? S.chatMsgs.map((m) => `<div class="b ${m.from === "admin" ? "admin" : "user"}">${esc(m.text)}<small>${hhmm(toDate(m.createdAt))}</small></div>`).join("")
+    ? S.chatMsgs.map((m) => `<div class="b ${m.from === "admin" ? "admin" : "user"}">${m.image ? `<a href="${esc(m.image)}" target="_blank" rel="noopener"><img class="b-img" src="${esc(m.image)}" alt="Gambar"></a>` : ""}${esc(m.text)}<small>${hhmm(toDate(m.createdAt))}</small></div>`).join("")
     : `<div class="thread-empty">Belum ada pesan.</div>`;
   if (stick) el.scrollTop = el.scrollHeight;
 }
@@ -1216,6 +1276,127 @@ async function seedDummy() {
 }
 
 /* =========================================
+   PEMBAYARAN: tolak bukti, terima tunai, batalkan + refund, kedaluwarsa
+   ========================================= */
+function openRejectForm(id) {
+  const o = S.orders.find((x) => x.id === id);
+  if (!o) return;
+  const left = MAX_PROOF - (o.proofs || []).length;
+  const timeOk = payDeadline(o) > Date.now();
+  openModal({
+    title: "Tolak bukti transfer", small: true,
+    body: `<form id="rjForm">
+      ${field("Alasan penolakan", `<input name="reason" required maxlength="100" placeholder="Contoh: nominal tidak sesuai">`, "Alasan ini terlihat oleh pelanggan.")}
+      <label class="tog" style="margin-bottom:6px"><span class="sw"><input type="checkbox" name="final" ${left > 0 && timeOk ? "" : "checked disabled"}><i></i></span>Tolak permanen (Pesanan Gagal)</label>
+      <p class="muted sm" style="line-height:1.5">${left > 0 && timeOk
+        ? `Jika tidak dicentang, pelanggan boleh mengirim ulang bukti (sisa ${left} kali, selama waktu bayar belum habis).`
+        : "Batas kirim ulang atau waktu bayar sudah habis, jadi pesanan akan menjadi Gagal."}</p>
+      <div class="modal-foot"><button type="button" class="btn ghost" data-close>Batal</button><button class="btn danger" type="submit">Tolak</button></div>
+    </form>`,
+    mount(root) {
+      $("#rjForm", root).addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const reason = fd.get("reason").trim();
+        const permanent = fd.get("final") === "on" || !(left > 0 && timeOk);
+        const data = permanent
+          ? { status: "gagal", payStatus: "ditolak", payNote: reason, updatedAt: TS() }
+          : { status: "menunggu_bayar", payNote: reason, updatedAt: TS() };
+        try { await db.collection("orders").doc(id).update(data); closeModal(); toast(permanent ? "Pesanan ditandai Gagal." : "Bukti ditolak. Pelanggan diminta kirim ulang."); }
+        catch (ex) { toast(errMsg(ex)); }
+      });
+    }
+  });
+}
+
+function openCashForm(id) {
+  const o = S.orders.find((x) => x.id === id);
+  if (!o) return;
+  openModal({
+    title: "Terima tunai " + (o.code || ""), small: true,
+    body: `<form id="csForm">
+      <div class="cash-total"><small>Total tagihan</small><b>${rupiah(o.total)}</b></div>
+      ${field("Uang diterima (opsional)", `<input name="given" type="number" min="0" step="500" inputmode="numeric" placeholder="${o.total}">`, "Isi untuk menghitung kembalian.")}
+      <div class="cash-change" id="csChange">Kembalian: -</div>
+      <div class="modal-foot"><button type="button" class="btn ghost" data-close>Batal</button><button class="btn primary" type="submit">Terima &amp; kirim ke dapur</button></div>
+    </form>`,
+    mount(root) {
+      const inp = $("input[name=given]", root), out = $("#csChange", root);
+      inp.addEventListener("input", () => {
+        const g = Number(inp.value);
+        out.textContent = !inp.value ? "Kembalian: -" : g >= o.total ? `Kembalian: ${rupiah(g - o.total)}` : `Uang kurang ${rupiah(o.total - g)}`;
+        out.classList.toggle("bad", !!inp.value && g < o.total);
+      });
+      $("#csForm", root).addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const g = Number(inp.value) || 0;
+        if (g && g < o.total) { toast("Uang yang diterima kurang dari total."); return; }
+        const data = { status: "baru", payStatus: "lunas", paidAt: TS(), updatedAt: TS() };
+        if (g) { data.cashGiven = g; data.change = g - o.total; }
+        try { await db.collection("orders").doc(id).update(data); extendSessionFor(o); closeModal(); toast(g ? `Tunai diterima. Kembalian ${rupiah(g - o.total)}.` : "Tunai diterima."); }
+        catch (ex) { toast(errMsg(ex)); }
+      });
+    }
+  });
+}
+
+function openCancelForm(id) {
+  const o = S.orders.find((x) => x.id === id);
+  if (!o) return;
+  const paid = o.payStatus === "lunas";
+  if (!paid) {
+    confirmBox({ title: "Batalkan pesanan", text: `Pesanan ${o.code} akan dibatalkan.`, ok: "Batalkan", danger: true }).then(async (yes) => {
+      if (!yes) return;
+      try { await db.collection("orders").doc(id).update({ status: "dibatalkan", updatedAt: TS() }); toast("Pesanan dibatalkan."); } catch (ex) { toast(errMsg(ex)); }
+    });
+    return;
+  }
+  const full = o.status === "baru";
+  openModal({
+    title: "Batalkan pesanan berbayar", small: true,
+    body: `<form id="cnForm">
+      <p class="muted sm" style="line-height:1.5;margin-bottom:12px">Pesanan ${esc(o.code)} sudah dibayar (${rupiah(o.total)}). ${full ? "Belum diproses, jadi disarankan refund penuh." : "Sudah diproses: isi jumlah refund sesuai kebijakan (bagian yang sudah dibuat bisa ditahan)."}</p>
+      ${field("Jumlah refund (Rp)", `<input name="amount" type="number" min="0" max="${o.total}" step="500" required value="${full ? o.total : ""}" placeholder="0 sampai ${o.total}">`)}
+      ${field("Catatan (opsional)", `<input name="note" maxlength="100" placeholder="Contoh: kedai kehabisan bahan">`)}
+      <div class="modal-foot"><button type="button" class="btn ghost" data-close>Kembali</button><button class="btn danger" type="submit">Batalkan pesanan</button></div>
+    </form>`,
+    mount(root) {
+      $("#cnForm", root).addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const amount = Math.round(Number(fd.get("amount")));
+        if (!(amount >= 0 && amount <= o.total)) { toast("Jumlah refund harus 0 sampai " + rupiah(o.total)); return; }
+        const data = { status: "dibatalkan", updatedAt: TS(), refundAmount: amount, refundStatus: amount > 0 ? "perlu" : "tidak", refundNote: fd.get("note").trim() };
+        try { await db.collection("orders").doc(id).update(data); closeModal(); toast(amount > 0 ? "Pesanan dibatalkan. Masuk daftar Perlu refund." : "Pesanan dibatalkan."); }
+        catch (ex) { toast(errMsg(ex)); }
+      });
+    }
+  });
+}
+
+// Pesanan menunggu bayar yang melewati batas waktu -> kedaluwarsa (berjalan selama panel admin terbuka)
+// Pembayaran diterima -> sesi meja pemilik pesanan diperpanjang (agar chat & pemantauan pesanan tetap jalan)
+async function extendSessionFor(o) {
+  try {
+    const t = S.tables.find((x) => x.id === o.mejaId);
+    if (!t || !o.sessionId || t.sessionId !== o.sessionId) return;
+    const until = Math.max(Date.now() + sessMinutes() * 60000, tms(t.sessionUntil));
+    await db.collection("tables").doc(t.id).update({ sessionUntil: firebase.firestore.Timestamp.fromMillis(until) });
+  } catch (e) { console.warn("Sesi tidak diperpanjang:", e.message); }
+}
+const expiring = new Set();
+function sweepExpired() {
+  if (!S.ordersReady) return;
+  S.orders.forEach((o) => {
+    if (o.status !== "menunggu_bayar" || expiring.has(o.id)) return;
+    if (Date.now() < payDeadline(o) + 3000) return;
+    expiring.add(o.id);
+    db.collection("orders").doc(o.id).update({ status: "kedaluwarsa", payStatus: "kedaluwarsa", updatedAt: TS() }).catch(() => expiring.delete(o.id));
+  });
+}
+setInterval(sweepExpired, 15000);
+
+/* =========================================
    EVENT DELEGATION
    ========================================= */
 document.addEventListener("click", async (e) => {
@@ -1249,6 +1430,24 @@ document.addEventListener("click", async (e) => {
         }
         await b.commit();
       } catch (ex) { toast(errMsg(ex)); }
+      break;
+    case "pay-approve": {
+      const o = S.orders.find((x) => x.id === id);
+      if (!o) break;
+      if (await confirmBox({ title: "Setujui pembayaran", text: `Bukti transfer ${o.code} sesuai (${rupiah(o.total)})? Pesanan akan masuk ke dapur.`, ok: "Setujui" })) {
+        try { await db.collection("orders").doc(id).update({ status: "baru", payStatus: "lunas", paidAt: TS(), updatedAt: TS() }); toast("Pembayaran disetujui."); extendSessionFor(o); }
+        catch (ex) { toast(errMsg(ex)); }
+      }
+      break;
+    }
+    case "pay-reject": openRejectForm(id); break;
+    case "cash-accept": openCashForm(id); break;
+    case "cancel-order": openCancelForm(id); break;
+    case "refund-done":
+      if (await confirmBox({ title: "Refund selesai", text: "Tandai bahwa uang sudah dikembalikan ke pelanggan?", ok: "Sudah direfund" })) {
+        try { await db.collection("orders").doc(id).update({ refundStatus: "selesai", refundedAt: TS(), updatedAt: TS() }); toast("Refund ditandai selesai."); }
+        catch (ex) { toast(errMsg(ex)); }
+      }
       break;
     case "clear-table": {
       const t = S.tables.find((x) => x.id === id);
@@ -1350,7 +1549,7 @@ document.addEventListener("submit", async (e) => {
   }
   if (e.target.id !== "setForm") return;
   e.preventDefault();
-  if (S.ups.hero.busy || S.ups.logo.busy) { toast("Tunggu unggahan gambar selesai."); return; }
+  if (S.ups.hero.busy || S.ups.logo.busy || S.ups.qris.busy) { toast("Tunggu unggahan gambar selesai."); return; }
   const fd = new FormData(e.target);
   const appUrl = (fd.get("appUrl") || "").trim();
   if (appUrl && !/^https?:\/\//i.test(appUrl)) { toast("Alamat aplikasi harus diawali http:// atau https://"); return; }
@@ -1365,10 +1564,18 @@ document.addEventListener("submit", async (e) => {
   const serviceRate = Number(fd.get("serviceRate")), taxRate = Number(fd.get("taxRate"));
   if (!(sessionMinutes >= 15 && sessionMinutes <= 720)) { toast("Durasi sesi harus 15 sampai 720 menit."); return; }
   if (!(serviceRate >= 0 && serviceRate <= 30 && taxRate >= 0 && taxRate <= 30)) { toast("Pajak dan layanan harus 0 sampai 30 persen."); return; }
+  const payMode = fd.get("payMode") === "awal" ? "awal" : "akhir";
+  const payTransfer = fd.get("payTransfer") === "on", payCash = fd.get("payCash") === "on";
+  const bankName = fd.get("bankName").trim(), accNo = fd.get("accNo").trim(), accName = fd.get("accName").trim();
+  if (payMode === "awal") {
+    if (!payTransfer && !payCash) { toast("Aktifkan minimal satu metode pembayaran."); return; }
+    if (payTransfer && !S.ups.qris.url && !accNo && !payCash) { toast("Transfer butuh gambar QRIS atau nomor rekening."); return; }
+  }
   const open0 = schedule.find((d) => d.open);
   const data = {
     name: fd.get("name").trim(), badge: fd.get("badge").trim(), tagline: fd.get("tagline").trim(),
     schedule, tzOffset: Number(fd.get("tzOffset")), sessionMinutes, serviceRate, taxRate,
+    payMode, payTransfer, payCash, bankName, accNo, accName, qrisUrl: S.ups.qris.url,
     jamBuka: open0 ? `${mm(open0.from).replace(":", ".")} - ${mm(open0.to).replace(":", ".")}` : "Tutup",
     heroImg: S.ups.hero.url, logo: S.ups.logo.url,
     brandName: fd.get("brandName").trim(), appUrl,

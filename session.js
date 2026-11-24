@@ -147,6 +147,17 @@ const Session = (() => {
     return "Sesi meja ini sudah berakhir. Scan ulang QR di mejamu untuk memesan.";
   }
 
+  /* ---------- Pembayaran ---------- */
+  function payConf() {
+    const hasQris = !!cfg.qrisUrl, hasAcc = !!cfg.accNo;
+    return {
+      mode: cfg.payMode === "awal" ? "awal" : "akhir",
+      transfer: cfg.payTransfer !== false && (hasQris || hasAcc),
+      cash: cfg.payCash !== false,
+      qrisUrl: cfg.qrisUrl || "", bankName: cfg.bankName || "", accNo: cfg.accNo || "", accName: cfg.accName || ""
+    };
+  }
+
   /* ---------- Pajak & layanan (harga menu SUDAH termasuk) ---------- */
   function fee(total) {
     const s = Number(cfg.serviceRate) || 0, t = Number(cfg.taxRate) || 0;
@@ -175,6 +186,8 @@ const Session = (() => {
     tableId: () => (table ? table.id : ""),
     blockText,
     hoursText,
+    cfg: () => cfg,
+    payConf,
     fee,
     changedSince
   };

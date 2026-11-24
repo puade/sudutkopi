@@ -20,5 +20,6 @@ const db = firebase.firestore();
 // Upload gambar (unsigned preset harus berstatus "Unsigned" di dashboard Cloudinary)
 const CLOUDINARY = {
   cloudName: "yjthurvv",
-  uploadPreset: "sudutkopi-app"
+  uploadPreset: "sudutkopi-app",     // gambar menu/logo (admin)
+  proofPreset: "sudutkopi-bukti"     // bukti transfer pelanggan (preset unsigned terpisah)
 };

@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#fbf7f3">
+  <title>Sudut Kopi</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app" id="app">
+
+    <!-- Header -->
+    <header class="topbar">
+      <div class="brand">
+        <img class="brand-logo-img" id="brandLogo" alt="" hidden>
+        <span class="brand-name" id="brandName">Sudut Kopi</span>
+      </div>
+      <button class="icon-btn bell" id="btnBell" aria-label="Notifikasi">
+        <span data-icon="bell"></span>
+        <i class="bell-dot" id="bellDot" hidden></i>
+      </button>
+    </header>
+
+    <!-- Hero -->
+    <section class="hero">
+      <div class="hero-img" id="heroImg"></div>
+      <div class="hero-fade"></div>
+      <div class="hero-content">
+        <span class="badge">Demo POS Basic</span>
+        <h1 id="outletName">Masa Rehat</h1>
+        <p id="outletTagline">Jeda sebentar kerjamu, beri stimulan agar fokus terjaga!</p>
+      </div>
+    </section>
+
+    <!-- Info card -->
+    <section class="info-card">
+      <div class="info-item">
+        <div class="info-label"><span data-icon="utensils"></span>MEJA</div>
+        <div class="info-value" id="infoMeja">Meja 01</div>
+      </div>
+      <div class="info-item">
+        <div class="info-label"><span data-icon="clock"></span>JAM BUKA</div>
+        <div class="info-value" id="infoJam">08.00 - 22.00</div>
+      </div>
+      <div class="info-item">
+        <div class="info-label"><span data-icon="pin"></span>AREA</div>
+        <div class="info-value" id="infoArea">Indoor</div>
+      </div>
+    </section>
+
+    <!-- Search -->
+    <section class="search">
+      <span class="search-icon" data-icon="search"></span>
+      <input type="search" id="searchInput" placeholder="Cari kopi, makanan, dessert..." autocomplete="off">
+      <span class="session-chip"><span data-icon="clock"></span>Sesi <span id="sessionText">2 jam</span></span>
+    </section>
+
+    <!-- Categories -->
+    <nav class="chips" id="chips" aria-label="Kategori"></nav>
+
+    <!-- Menu -->
+    <section class="menu-head">
+      <h2 id="menuTitle">Menu favorit</h2>
+      <button class="link-btn" id="btnAll">Lihat semua <span data-icon="arrow-right"></span></button>
+    </section>
+    <section class="grid" id="menuGrid"></section>
+
+    <div class="spacer"></div>
+  </div>
+
+  <!-- Cart bar -->
+  <div class="cart-bar-wrap">
+    <div class="cart-bar hidden" id="cartBar">
+      <button class="cart-fab" id="btnCartIcon" aria-label="Buka keranjang">
+        <span data-icon="cart"></span>
+        <b class="cart-count" id="cartCount">0</b>
+      </button>
+      <div class="cart-info">
+        <strong id="cartItemsText">0 item di keranjang</strong>
+        <span id="cartTotalText">Total Rp 0</span>
+      </div>
+      <button class="btn-primary" id="btnOpenCart">Lihat Keranjang <span data-icon="arrow-right"></span></button>
+    </div>
+  </div>
+
+  <!-- Cart sheet -->
+  <div class="overlay" id="overlay"></div>
+  <aside class="sheet" id="sheet" aria-hidden="true">
+    <div class="sheet-handle"></div>
+    <div class="sheet-head">
+      <h3 id="sheetTitle">Keranjang</h3>
+      <button class="icon-btn" id="btnCloseSheet" aria-label="Tutup"><span data-icon="x"></span></button>
+    </div>
+    <div class="sheet-body" id="sheetBody"></div>
+    <div class="sheet-foot" id="sheetFoot"></div>
+  </aside>
+
+  <!-- Notification sheet -->
+  <aside class="sheet" id="notifSheet" aria-hidden="true">
+    <div class="sheet-handle"></div>
+    <div class="sheet-head">
+      <h3>Notifikasi</h3>
+      <div class="head-actions">
+        <button class="link-btn" id="btnClearNotif" hidden>Hapus semua</button>
+        <button class="icon-btn" data-close-sheet aria-label="Tutup"><span data-icon="x"></span></button>
+      </div>
+    </div>
+    <div class="sheet-body" id="notifBody"></div>
+  </aside>
+
+  <!-- Chat sheet -->
+  <aside class="sheet chat-sheet" id="chatSheet" aria-hidden="true">
+    <div class="sheet-handle"></div>
+    <div class="sheet-head">
+      <div class="chat-title"><h3>Chat dengan Admin</h3><span id="chatSub">Tanyakan pesanan atau menu</span></div>
+      <button class="icon-btn" data-close-sheet aria-label="Tutup"><span data-icon="x"></span></button>
+    </div>
+    <div class="sheet-body chat-body" id="chatBody"></div>
+    <form class="chat-form" id="chatForm" autocomplete="off">
+      <input type="text" id="chatInput" maxlength="500" placeholder="Tulis pesan..." aria-label="Pesan">
+      <button class="chat-send" type="submit" aria-label="Kirim"><span data-icon="send"></span></button>
+    </form>
+  </aside>
+
+  <!-- Tombol chat melayang (kanan bawah) -->
+  <div class="fab-wrap" id="fabWrap" hidden>
+    <div class="fab-inner">
+      <button class="chat-fab" id="btnChat" aria-label="Chat dengan admin">
+        <span data-icon="chat"></span>
+        <b class="fab-badge" id="fabBadge" hidden>0</b>
+      </button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+  <script src="firebase-config.js"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+  <script src="live.js"></script>
+</body>
+</html>

@@ -22,6 +22,7 @@ const Session = (() => {
   let sid = "";
   let mode = "demo"; // demo | noTable | ok | closed | ended
   let attempted = false;
+  let openErr = ""; // kode galat bila sesi gagal dibuka (untuk diagnosis)
   let lastSig = "";
   const listeners = [];
 
@@ -92,7 +93,7 @@ const Session = (() => {
         mode = open ? "ended" : "closed";
       }
     }
-    const sig = [mode, sid, hoursText(), cfg.serviceRate, cfg.taxRate, cfg.acceptOrders].join("|");
+    const sig = [mode, sid, openErr, hoursText(), cfg.serviceRate, cfg.taxRate, cfg.acceptOrders].join("|");
     if (sig !== lastSig) { lastSig = sig; listeners.forEach((fn) => { try { fn(mode); } catch (e) { console.error(e); } }); }
   }
 
@@ -105,7 +106,8 @@ const Session = (() => {
       saveSid(table.id, id);
     } catch (e) {
       // gagal (mis. ponsel lain sudah membuka sesi lebih dulu): ikut sesi yang ada lewat snapshot
-      console.warn("Sesi tidak dibuka:", e.code || e.message);
+      openErr = e.code || e.message || "unknown";
+      console.warn("Sesi tidak dibuka:", openErr);
     }
   }
 
@@ -138,6 +140,9 @@ const Session = (() => {
       return s.why === "manual"
         ? "Kedai sedang tidak menerima pesanan."
         : ("Kedai sedang tutup. " + nextOpenText(Date.now())).trim();
+    }
+    if (openErr && !(table && tableLive(table, Date.now()))) {
+      return `Sesi meja tidak bisa dibuka (kode: ${openErr}). Scan ulang QR di mejamu, atau minta bantuan kasir.`;
     }
     return "Sesi meja ini sudah berakhir. Scan ulang QR di mejamu untuk memesan.";
   }

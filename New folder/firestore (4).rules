@@ -1,0 +1,140 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Daftar email admin (boleh lebih dari satu, pisahkan dengan koma).
+    function isAdmin() {
+      return request.auth != null
+        && request.auth.token.email in ['admin@gmail.com'];
+    }
+
+    /* ---------------------------------------------------------
+       SESI MEJA
+       tables/{id} menyimpan sesi yang sedang berjalan:
+         sessionId       : kode acak sesi ('' = meja kosong)
+         sessionOpenedAt : waktu sesi dibuka (diisi pelanggan saat scan QR)
+         sessionUntil    : batas waktu yang diperpanjang admin saat pesanan diproses
+       Sesi dianggap hidup bila:
+         sekarang < sessionOpenedAt + 15 menit   (jendela tamu, untuk memesan pertama kali)
+         ATAU sekarang < sessionUntil            (diperpanjang admin)
+       --------------------------------------------------------- */
+    function tableData(id) {
+      return get(/databases/$(database)/documents/tables/$(id)).data;
+    }
+
+    function sessionLive(t) {
+      return t.get('sessionId', '') is string
+        && t.get('sessionId', '') != ''
+        && ( (t.get('sessionOpenedAt', null) is timestamp
+              && request.time < t.sessionOpenedAt + duration.value(15, 'm'))
+          || (t.get('sessionUntil', null) is timestamp
+              && request.time < t.sessionUntil) );
+    }
+
+    /* ---------------------------------------------------------
+       JAM BUKA + SAKLAR TERIMA PESANAN  (settings/outlet)
+         acceptOrders : true/false (saklar manual)
+         tzOffset     : selisih zona waktu dalam menit (WIB = 420)
+         schedule     : daftar 7 hari, indeks 0 = Minggu ... 6 = Sabtu
+                        tiap hari { open: bool, from: menit, to: menit }  (menit sejak 00.00)
+       Bila schedule belum diatur, dianggap selalu buka.
+       --------------------------------------------------------- */
+    function outletCfg() {
+      return get(/databases/$(database)/documents/settings/outlet).data;
+    }
+
+    function openNow(c) {
+      let ms = request.time.toMillis() + c.get('tzOffset', 420) * 60000;
+      let wd = (math.floor(ms / 86400000) + 4) % 7;      // 1 Jan 1970 = Kamis (4)
+      let mins = (ms % 86400000) / 60000;
+      return c.get('acceptOrders', true) == true
+        && ( c.get('schedule', null) == null
+          || ( c.schedule[wd].open == true
+            && mins >= c.schedule[wd].from
+            && mins < c.schedule[wd].to ) );
+    }
+
+    // Data yang dibaca pelanggan: publik baca, hanya admin yang boleh ubah
+    match /settings/{id}   { allow read: if true; allow write: if isAdmin(); }
+    match /categories/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /menu/{id}       { allow read: if true; allow write: if isAdmin(); }
+
+    // Meja: pelanggan hanya boleh MEMBUKA sesi pada meja yang kosong / sesinya sudah habis,
+    // dan hanya bila kedai sedang menerima pesanan. Admin bebas mengubah.
+    match /tables/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+      allow update: if request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['sessionId', 'sessionOpenedAt'])
+                    && request.resource.data.sessionId is string
+                    && request.resource.data.sessionId.size() >= 12
+                    && request.resource.data.sessionId.size() <= 40
+                    && request.resource.data.sessionOpenedAt == request.time
+                    && !sessionLive(resource.data)
+                    && openNow(outletCfg());
+    }
+
+    // Pesanan
+    //  - create : pelanggan, hanya saat kedai buka dan sesi mejanya hidup (sessionId cocok)
+    //  - get    : siapa pun yang tahu ID pesanan (ID acak 20 karakter) -> memantau status pesanannya
+    //  - list   : hanya admin
+    match /orders/{id} {
+      allow create: if request.resource.data.keys().hasOnly(
+                         ['code','mejaId','mejaName','area','items','count','total','note','status','createdAt','sessionId','fee'])
+                    && request.resource.data.status == 'baru'
+                    && request.resource.data.items is list
+                    && request.resource.data.items.size() > 0
+                    && request.resource.data.items.size() <= 50
+                    && request.resource.data.total is number
+                    && request.resource.data.total >= 0
+                    && request.resource.data.fee is map
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.mejaId is string
+                    && request.resource.data.sessionId is string
+                    && tableData(request.resource.data.mejaId).get('sessionId', '') == request.resource.data.sessionId
+                    && sessionLive(tableData(request.resource.data.mejaId))
+                    && openNow(outletCfg());
+      allow get: if true;
+      allow list: if isAdmin();
+      allow update, delete: if isAdmin();
+    }
+
+    // Chat pelanggan <-> admin
+    //  chatId = kode acak di perangkat pelanggan. Hanya yang tahu kodenya yang bisa membaca percakapan,
+    //  dan hanya admin yang bisa melihat daftar semua percakapan.
+    //  Pelanggan hanya boleh menulis saat sesi mejanya hidup.
+    function chatOk(d) {
+      return d.keys().hasOnly(['mejaId','mejaName','area','lastMessage','lastAt','lastFrom','unreadAdmin','sessionId'])
+          && d.lastMessage is string && d.lastMessage.size() <= 120
+          && d.unreadAdmin is int && d.unreadAdmin >= 0 && d.unreadAdmin < 1000
+          && d.lastFrom == 'user'
+          && d.lastAt == request.time
+          && d.mejaId is string
+          && d.sessionId is string
+          && tableData(d.mejaId).get('sessionId', '') == d.sessionId
+          && sessionLive(tableData(d.mejaId));
+    }
+
+    match /chats/{chatId} {
+      allow get: if true;
+      allow list: if isAdmin();
+      allow create: if chatOk(request.resource.data);
+      allow update: if isAdmin() || chatOk(request.resource.data);
+      allow delete: if isAdmin();
+
+      match /messages/{mid} {
+        allow get, list: if true;
+        allow create: if request.resource.data.keys().hasOnly(['from','text','createdAt'])
+                      && request.resource.data.text is string
+                      && request.resource.data.text.size() > 0
+                      && request.resource.data.text.size() <= 500
+                      && request.resource.data.createdAt == request.time
+                      && ( (request.resource.data.from == 'admin' && isAdmin())
+                        || (request.resource.data.from == 'user'
+                            && sessionLive(tableData(
+                                 getAfter(/databases/$(database)/documents/chats/$(chatId)).data.mejaId))) );
+        allow update, delete: if isAdmin();
+      }
+    }
+  }
+}

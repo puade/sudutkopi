@@ -346,5 +346,5 @@ const Live = (() => {
 
   (window.appReady || Promise.resolve()).then(init);
 
-  return { track, sendImage };
+  return { track, sendImage, notify: (kind, title, text) => addNotif(kind, title, text) };
 })();

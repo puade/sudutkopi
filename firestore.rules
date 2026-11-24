@@ -136,6 +136,36 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Pembayaran tagihan meja (mode 'akhir' = bayar setelah makan)
+    //  - create : pelanggan, selama meja masih memegang sessionId yang sama (belum dikosongkan admin)
+    //  - get    : siapa pun yang tahu ID (acak) -> memantau status pembayarannya
+    //  - update : admin, atau pelanggan hanya untuk mengirim bukti transfer (aturan sama dengan pesanan)
+    match /payments/{id} {
+      allow create: if request.resource.data.keys().hasOnly(
+                         ['code','mejaId','mejaName','sessionId','orderIds','lines','total','status','payMethod','proofs','createdAt'])
+                    && request.resource.data.status == 'menunggu_bayar'
+                    && request.resource.data.get('payMethod', '') in ['transfer', 'cash']
+                    && outletCfg().get('payMode', 'off') == 'akhir'
+                    && ( (request.resource.data.payMethod == 'transfer' && outletCfg().get('payTransfer', true) == true)
+                      || (request.resource.data.payMethod == 'cash' && outletCfg().get('payCash', true) == true) )
+                    && request.resource.data.proofs.size() == 0
+                    && request.resource.data.orderIds is list
+                    && request.resource.data.orderIds.size() > 0
+                    && request.resource.data.orderIds.size() <= 30
+                    && request.resource.data.lines is list
+                    && request.resource.data.total is number
+                    && request.resource.data.total > 0
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.sessionId is string
+                    && request.resource.data.sessionId != ''
+                    && request.resource.data.mejaId is string
+                    && tableData(request.resource.data.mejaId).get('sessionId', '') == request.resource.data.sessionId;
+      allow get: if true;
+      allow list: if isAdmin();
+      allow update: if isAdmin() || proofUpdate();
+      allow delete: if isAdmin();
+    }
+
     // Chat pelanggan <-> admin
     //  chatId = kode acak di perangkat pelanggan. Hanya yang tahu kodenya yang bisa membaca percakapan,
     //  dan hanya admin yang bisa melihat daftar semua percakapan.

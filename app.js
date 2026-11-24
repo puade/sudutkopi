@@ -222,6 +222,7 @@ function showSheetRaw() { // menampilkan panel keranjang tanpa merender ulang is
 
 function openSheet() {
   if (typeof Pay !== "undefined") Pay.leave();
+  if (typeof Bill !== "undefined") Bill.leave();
   orderDone = false;
   renderSheet();
   $("#overlay").classList.add("show");
@@ -230,6 +231,7 @@ function openSheet() {
 }
 function closeSheet() {
   if (typeof Pay !== "undefined" && $("#sheet").classList.contains("show")) Pay.onClose();
+  if (typeof Bill !== "undefined") Bill.onClose();
   // menutup semua panel (keranjang, notifikasi, chat)
   $("#overlay").classList.remove("show");
   document.querySelectorAll(".sheet").forEach((s) => {
@@ -381,6 +383,7 @@ async function placeOrder() {
   orderDone = true;
   renderMenu();
   renderCartBar();
+  if (!awal && pc.mode === "akhir" && orderId && typeof Bill !== "undefined") Bill.add(orderId, code, total); // masuk tagihan meja
   if (awal && orderId && typeof Pay !== "undefined") {
     Pay.begin({ id: orderId, code, total, method: state.payMethod, meja });
     Pay.open(); // tampilkan kartu pembayaran (QRIS/rekening atau Bayar di Kasir)
@@ -422,7 +425,11 @@ document.addEventListener("click", (e) => {
     return;
   }
   const pm = e.target.closest("[data-pay]");
-  if (pm) { state.payMethod = pm.dataset.pay; renderSheet(); hydrateIcons(); return; }
+  if (pm) {
+    state.payMethod = pm.dataset.pay;
+    if (typeof Bill !== "undefined" && Bill.isOpen()) Bill.render(); else renderSheet();
+    hydrateIcons(); return;
+  }
   const act = e.target.closest("[data-act]");
   if (act) {
     const id = act.dataset.id;

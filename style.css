@@ -273,3 +273,10 @@ body.has-cart .chat-fab{bottom:calc(110px + env(safe-area-inset-bottom))}
 .spin-ic svg{animation:payspin 2.4s linear infinite}
 @keyframes payspin{to{transform:rotate(360deg)}}
 .msg-img{display:block;max-width:100%;max-height:220px;border-radius:10px;margin-bottom:6px}
+
+/* ---------- Tahap 3: tagihan meja ---------- */
+#billBar{background:#fff4e5;color:#8a4b00;border-color:#f3d3a3}
+#billBar button{background:#d9822b}
+.bill-order{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:10px}
+.bill-head{display:flex;justify-content:space-between;font-weight:700;color:var(--navy);margin-bottom:4px}
+.bill-lines{font-size:12.5px;color:var(--muted);line-height:1.45}

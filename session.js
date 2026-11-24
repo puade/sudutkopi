@@ -151,7 +151,7 @@ const Session = (() => {
   function payConf() {
     const hasQris = !!cfg.qrisUrl, hasAcc = !!cfg.accNo;
     return {
-      mode: cfg.payMode === "awal" ? "awal" : "akhir",
+      mode: cfg.payMode === "awal" ? "awal" : cfg.payMode === "akhir" ? "akhir" : "off", // awal | akhir | off
       transfer: cfg.payTransfer !== false && (hasQris || hasAcc),
       cash: cfg.payCash !== false,
       qrisUrl: cfg.qrisUrl || "", bankName: cfg.bankName || "", accNo: cfg.accNo || "", accName: cfg.accName || ""
@@ -184,6 +184,7 @@ const Session = (() => {
     canChat: () => mode === "ok" || mode === "closed",
     sid: () => sid,
     tableId: () => (table ? table.id : ""),
+    holdsTable: () => !!(table && sid && table.sessionId === sid), // meja masih memegang sesi perangkat ini (belum dikosongkan)
     blockText,
     hoursText,
     cfg: () => cfg,

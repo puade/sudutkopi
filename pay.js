@@ -47,7 +47,7 @@ const Pay = (() => {
 
   /* ---------- Siklus ---------- */
   function begin(info) {
-    rec = { id: info.id, code: info.code, total: info.total, method: info.method, meja: info.meja };
+    rec = { id: info.id, code: info.code, total: info.total, method: info.method, meja: info.meja, coll: info.coll || "orders" };
     order = null;
     picked = null; lastSig = "";
     write();
@@ -64,9 +64,14 @@ const Pay = (() => {
 
   function watch() {
     if (!hasDb || !rec || unsub) return;
-    unsub = db.collection("orders").doc(rec.id).onSnapshot((snap) => {
+    unsub = db.collection(rec.coll || "orders").doc(rec.id).onSnapshot((snap) => {
       if (!snap.exists) { clear(); return; }
+      const prev = order && order.status;
       order = snap.data({ serverTimestamps: "estimate" });
+      if (rec.coll === "payments") {
+        if (prev && prev !== order.status) notifyPayment(prev, order.status);
+        if (order.status === "lunas" && typeof Bill !== "undefined") Bill.remove(order.orderIds || []);
+      }
       if (!WAITING.includes(order.status) && !viewing) { clear(); return; }
       renderBar();
       if (viewing) {
@@ -75,6 +80,20 @@ const Pay = (() => {
       }
       if (typeof onSession === "function") onSession(); // perbarui tombol pesan (active() berubah)
     }, () => { /* diabaikan */ });
+  }
+
+  const PAY_MSG = {
+    verifikasi: ["Bukti transfer sedang diproses", "clock", false, "Bukti transfer pembayaran sedang diperiksa admin."],
+    lunas: ["Pembayaran diterima", "check", false, "Terima kasih! Pembayaran tagihan meja sudah diterima."],
+    gagal: ["Pembayaran Gagal", "x", true, "Pembayaran tidak dapat diverifikasi. Hubungi admin lewat chat."],
+    kedaluwarsa: ["Waktu pembayaran habis", "x", true, "Waktu pembayaran habis. Buka tagihan untuk membayar lagi."]
+  };
+  function notifyPayment(prev, now) {
+    let m = PAY_MSG[now];
+    if (now === "menunggu_bayar" && prev === "verifikasi") m = ["Bukti transfer ditolak", "x", true, "Bukti transfer ditolak. Buka pembayaran untuk kirim ulang."];
+    if (!m) return;
+    toast(m[0], m[2] ? "warn" : "ok", m[1]);
+    if (typeof Live !== "undefined" && Live.notify) Live.notify(m[2] ? "batal" : "selesai", m[0], m[3]);
   }
 
   /* ---------- Bar pengingat ---------- */
@@ -128,21 +147,25 @@ const Pay = (() => {
     lastSig = [order.status, (order.proofs || []).length, order.payNote || "", expired()].join("|");
     const cfg = Session.payConf();
     const st = order.status;
+    const isPay = rec.coll === "payments";
+    const expiredCard = () => doneCard("x", isPay ? "Waktu pembayaran habis" : "Pesanan dibatalkan otomatis",
+      isPay ? `Pembayaran ${esc(rec.code)} tidak diterima tepat waktu. Buka tagihan lagi untuk membayar.`
+            : `Pembayaran untuk ${esc(rec.code)} tidak diterima tepat waktu. Silakan pesan ulang.`);
     const closeFoot = `<button class="btn-primary btn-block" id="btnPayClose">Kembali ke Menu</button>`;
 
     if (st === "menunggu_bayar" && expired()) {
       title.textContent = "Waktu Pembayaran Habis";
-      body.innerHTML = doneCard("x", "Pesanan dibatalkan otomatis", `Pembayaran untuk ${esc(rec.code)} tidak diterima tepat waktu. Silakan pesan ulang.`);
+      body.innerHTML = expiredCard();
       foot.innerHTML = closeFoot; return;
     }
     if (st === "kedaluwarsa") {
       title.textContent = "Waktu Pembayaran Habis";
-      body.innerHTML = doneCard("x", "Pesanan dibatalkan otomatis", `Pembayaran untuk ${esc(rec.code)} tidak diterima tepat waktu. Silakan pesan ulang.`);
+      body.innerHTML = expiredCard();
       foot.innerHTML = closeFoot; return;
     }
     if (st === "gagal") {
-      title.textContent = "Pesanan Gagal";
-      body.innerHTML = doneCard("x", "Pesanan Gagal", esc(order.payNote || "Pembayaran tidak dapat diverifikasi.") + "<br>Hubungi admin lewat chat jika ada pertanyaan.", `<span class="code">${esc(rec.code)}</span>`);
+      title.textContent = isPay ? "Pembayaran Gagal" : "Pesanan Gagal";
+      body.innerHTML = doneCard("x", isPay ? "Pembayaran Gagal" : "Pesanan Gagal", esc(order.payNote || "Pembayaran tidak dapat diverifikasi.") + "<br>Hubungi admin lewat chat jika ada pertanyaan.", `<span class="code">${esc(rec.code)}</span>`);
       foot.innerHTML = closeFoot; return;
     }
     if (st === "dibatalkan") {
@@ -160,6 +183,11 @@ const Pay = (() => {
         <span class="code">${esc(rec.code)}</span></div>`;
       foot.innerHTML = `<button class="btn-primary btn-block" id="btnPayClose">Tutup</button>`;
       return;
+    }
+    if (isPay && st === "lunas") {
+      title.textContent = "Pembayaran Diterima";
+      body.innerHTML = doneCard("check", "Pembayaran Diterima", "Terima kasih! Tagihan meja sudah lunas.", `<span class="code">${esc(rec.code)}</span>`);
+      foot.innerHTML = closeFoot; return;
     }
     if (st !== "menunggu_bayar") { // baru / diproses / siap / selesai
       title.textContent = "Pesanan Terkirim";
@@ -248,7 +276,7 @@ const Pay = (() => {
     if (btn) { btn.disabled = true; btn.textContent = "Mengunggah..."; }
     try {
       const url = await upload(await shrink(picked));
-      await db.collection("orders").doc(rec.id).update({
+      await db.collection(rec.coll || "orders").doc(rec.id).update({
         proofs: [...(order.proofs || []), { url, at: Date.now() }],
         status: "verifikasi"
       });
@@ -302,5 +330,5 @@ const Pay = (() => {
   }
   (window.appReady || Promise.resolve()).then(init);
 
-  return { begin, open, onClose, active, leave: () => { viewing = false; renderBar(); } };
+  return { begin, open, onClose, active, hasRec: () => !!rec, leave: () => { viewing = false; renderBar(); } };
 })();

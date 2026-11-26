@@ -133,15 +133,26 @@
     </form>
   </aside>
 
-  <!-- Tombol chat melayang (kanan bawah) -->
-  <div class="fab-wrap" id="fabWrap" hidden>
-    <div class="fab-inner">
-      <button class="chat-fab" id="btnChat" aria-label="Chat dengan admin">
-        <span data-icon="chat"></span>
-        <b class="fab-badge" id="fabBadge" hidden>0</b>
-      </button>
+  <!-- Navigasi bawah -->
+  <nav class="bottom-nav" id="bottomNav" aria-label="Navigasi">
+    <div class="bn-inner">
+      <button class="bn-item" id="btnTrx" type="button"><span data-icon="receipt"></span><em>Transaksi</em><b class="bn-badge" id="trxBadge" hidden>0</b></button>
+      <button class="bn-item" id="btnChat" type="button" aria-label="Chat dengan admin"><span data-icon="chat"></span><em>Chat</em><b class="bn-badge" id="fabBadge" hidden>0</b></button>
+      <button class="bn-item" id="btnMove" type="button"><span data-icon="swap"></span><em>Pindah Meja</em><i class="bn-lock" data-icon="lock"></i></button>
+      <button class="bn-item" id="btnHist" type="button"><span data-icon="history"></span><em>Riwayat</em></button>
     </div>
-  </div>
+  </nav>
+
+  <!-- Panel Transaksi / Pindah Meja / Riwayat -->
+  <aside class="sheet" id="navSheet" aria-hidden="true">
+    <div class="sheet-handle"></div>
+    <div class="sheet-head">
+      <h3 id="navTitle">Transaksi</h3>
+      <button class="icon-btn" data-close-sheet aria-label="Tutup"><span data-icon="x"></span></button>
+    </div>
+    <div class="sheet-body" id="navBody"></div>
+    <div class="sheet-foot" id="navFoot"></div>
+  </aside>
 
   <div class="toast" id="toast"></div>
 
@@ -154,5 +165,6 @@
   <script src="live.js"></script>
   <script src="pay.js"></script>
   <script src="bill.js"></script>
+  <script src="trx.js"></script>
 </body>
 </html>

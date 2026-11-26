@@ -101,7 +101,7 @@ const Session = (() => {
     attempted = true;
     const id = "s" + rid(12);
     try {
-      await db.collection("tables").doc(table.id).update({ sessionId: id, sessionOpenedAt: SV() });
+      await db.collection("tables").doc(table.id).update({ sessionId: id, sessionOpenedAt: SV(), movedFrom: null, movedTo: null });
       sid = id;
       saveSid(table.id, id);
     } catch (e) {
@@ -109,6 +109,24 @@ const Session = (() => {
       openErr = e.code || e.message || "unknown";
       console.warn("Sesi tidak dibuka:", openErr);
     }
+  }
+
+  let unsubTable = null;
+  function listenTable() {
+    if (unsubTable) { unsubTable(); unsubTable = null; }
+    if (!table) return;
+    const id = table.id;
+    unsubTable = db.collection("tables").doc(id).onSnapshot((snap) => {
+      if (snap.exists && table && table.id === id) { table = { id: snap.id, ...snap.data({ serverTimestamps: "estimate" }) }; evaluate(); }
+    }, () => {});
+  }
+
+  // Sesi yang sama berpindah ke meja lain (setelah batch pindah meja berhasil)
+  function switchTable(t, until) {
+    table = { id: t.id, name: t.name, area: t.area, order: t.order, sessionId: sid, sessionOpenedAt: firebase.firestore.Timestamp.now(), sessionUntil: until || null };
+    saveSid(t.id, sid);
+    listenTable();
+    evaluate();
   }
 
   async function start(c, t, hasTables) {
@@ -121,9 +139,7 @@ const Session = (() => {
 
     if (mode === "ended" && !attempted) { await openSession(); }
     // dengarkan perubahan: admin menekan Kosongkan meja / memperpanjang sesi / menutup kedai
-    db.collection("tables").doc(table.id).onSnapshot((snap) => {
-      if (snap.exists) { table = { id: snap.id, ...snap.data({ serverTimestamps: "estimate" }) }; evaluate(); }
-    }, () => {});
+    listenTable();
     db.doc("settings/outlet").onSnapshot((snap) => {
       if (snap.exists) { cfg = snap.data(); evaluate(); }
     }, () => {});
@@ -184,6 +200,9 @@ const Session = (() => {
     canChat: () => mode === "ok" || mode === "closed",
     sid: () => sid,
     tableId: () => (table ? table.id : ""),
+    table: () => table,
+    switchTable,
+    isLive: (t) => tableLive(t, Date.now()),
     holdsTable: () => !!(table && sid && table.sessionId === sid), // meja masih memegang sesi perangkat ini (belum dikosongkan)
     blockText,
     hoursText,

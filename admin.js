@@ -823,7 +823,7 @@ function pgTables() {
     ${S.tables.length ? `<div class="tgrid">${S.tables.map((t) => `<div class="card tcard">
       <div class="t-ic">${ic("table")}</div><b>${esc(t.name)}</b><span class="chip-area">${esc(t.area || "-")}</span>
       ${(() => { const e = sessEnd(t); return e
-        ? `<span class="t-state busy">Terisi &middot; s/d ${hhmm(new Date(e))}</span><button class="btn ghost sm" data-act="clear-table" data-id="${t.id}">Kosongkan meja</button>`
+        ? `<span class="t-state busy">Terisi &middot; s/d ${hhmm(new Date(e))}</span>${t.movedFrom ? `<small class="muted">Pindahan dari ${esc((S.tables.find((x) => x.id === t.movedFrom) || {}).name || t.movedFrom)}</small>` : ""}<button class="btn ghost sm" data-act="clear-table" data-id="${t.id}">Kosongkan meja</button>`
         : `<span class="t-state free">Kosong</span>`; })()}
       <div class="t-act">
         <button class="icon-btn" data-act="qr-table" data-id="${t.id}" aria-label="Lihat QR">${ic("qr")}</button>
@@ -1406,7 +1406,7 @@ async function settlePayment(p, data) {
   const unpaid = S.orders.filter((o) => o.sessionId === p.sessionId && !["dibatalkan", "gagal", "kedaluwarsa"].includes(o.status) && o.payStatus !== "lunas" && !paid.has(o.id));
   const t = S.tables.find((x) => x.id === p.mejaId);
   if (!unpaid.length && t && t.sessionId === p.sessionId) {
-    try { await db.collection("tables").doc(t.id).update({ sessionId: "", sessionOpenedAt: null, sessionUntil: null }); toast(`Lunas. ${t.name} dikosongkan otomatis.`); }
+    try { await db.collection("tables").doc(t.id).update({ sessionId: "", sessionOpenedAt: null, sessionUntil: null, movedFrom: null, movedTo: null }); toast(`Lunas. ${t.name} dikosongkan otomatis.`); }
     catch (e) { toast(errMsg(e)); }
   } else toast(unpaid.length ? `Lunas. Meja masih punya ${unpaid.length} pesanan belum dibayar.` : "Pembayaran lunas.");
 }
@@ -1543,7 +1543,7 @@ document.addEventListener("click", async (e) => {
     case "clear-table": {
       const t = S.tables.find((x) => x.id === id);
       if (t && await confirmBox({ title: "Kosongkan meja", text: `Sesi ${t.name} diakhiri. Pelanggan di meja ini tidak bisa memesan lagi sampai ada yang scan QR.`, ok: "Kosongkan", danger: true })) {
-        try { await db.collection("tables").doc(id).update({ sessionId: "", sessionOpenedAt: null, sessionUntil: null }); toast(t.name + " dikosongkan."); }
+        try { await db.collection("tables").doc(id).update({ sessionId: "", sessionOpenedAt: null, sessionUntil: null, movedFrom: null, movedTo: null }); toast(t.name + " dikosongkan."); }
         catch (ex) { toast(errMsg(ex)); }
       }
       break;

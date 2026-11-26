@@ -330,5 +330,5 @@ const Pay = (() => {
   }
   (window.appReady || Promise.resolve()).then(init);
 
-  return { begin, open, onClose, active, hasRec: () => !!rec, leave: () => { viewing = false; renderBar(); } };
+  return { begin, open, onClose, active, hasRec: () => !!rec, recId: () => (rec ? rec.id : ""), leave: () => { viewing = false; renderBar(); } };
 })();

@@ -55,6 +55,55 @@ service cloud.firestore {
             && mins < c.schedule[wd].to ) );
     }
 
+    /* ---------------------------------------------------------
+       PINDAH MEJA (pelanggan yang sudah membayar memindahkan sesinya ke meja kosong)
+       Satu batch menulis:
+         meja baru : sessionId dipindah (+ sessionUntil yang sama) dan movedFrom = meja asal   -> moveIn
+         meja asal : dikosongkan dan movedTo = meja baru                                       -> moveOut
+         pesanan   : mejaId/mejaName/area diubah ke meja baru (hanya yang belum selesai)       -> orderMove
+       Syarat pembayaran diperiksa di aplikasi; aturan memastikan sesi memang sedang hidup di meja asal.
+       --------------------------------------------------------- */
+    function moveIn() {
+      let n = request.resource.data;
+      let o = tableData(n.movedFrom);
+      return n.diff(resource.data).affectedKeys().hasOnly(['sessionId', 'sessionOpenedAt', 'sessionUntil', 'movedFrom', 'movedTo'])
+        && n.sessionId is string && n.sessionId.size() >= 12 && n.sessionId.size() <= 40
+        && n.sessionOpenedAt == request.time
+        && n.movedFrom is string && n.movedFrom != ''
+        && n.get('movedTo', null) == null
+        && o.get('sessionId', '') == n.sessionId
+        && sessionLive(o)
+        && ( !('sessionUntil' in n) || n.sessionUntil == o.get('sessionUntil', null) )
+        && !sessionLive(resource.data)
+        && openNow(outletCfg());
+    }
+
+    function moveOut(id) {
+      let n = request.resource.data;
+      let t = getAfter(/databases/$(database)/documents/tables/$(n.movedTo)).data;
+      return n.diff(resource.data).affectedKeys().hasOnly(['sessionId', 'sessionOpenedAt', 'sessionUntil', 'movedFrom', 'movedTo'])
+        && resource.data.get('sessionId', '') != ''
+        && n.sessionId == ''
+        && n.get('sessionOpenedAt', null) == null
+        && n.get('sessionUntil', null) == null
+        && n.get('movedFrom', null) == null
+        && n.movedTo is string && n.movedTo != ''
+        && t.get('sessionId', '') == resource.data.sessionId
+        && t.get('movedFrom', '') == id;
+    }
+
+    function orderMove() {
+      let o = resource.data;
+      let n = request.resource.data;
+      return n.diff(o).affectedKeys().hasOnly(['mejaId', 'mejaName', 'area'])
+        && o.status in ['baru', 'diproses', 'siap']
+        && o.get('sessionId', '') != ''
+        && n.mejaId is string && n.mejaId != o.mejaId
+        && n.mejaName is string && n.mejaName.size() <= 40
+        && n.area is string && n.area.size() <= 40
+        && getAfter(/databases/$(database)/documents/tables/$(n.mejaId)).data.get('sessionId', '') == o.sessionId;
+    }
+
     // Data yang dibaca pelanggan: publik baca, hanya admin yang boleh ubah
     match /settings/{id}   { allow read: if true; allow write: if isAdmin(); }
     match /categories/{id} { allow read: if true; allow write: if isAdmin(); }
@@ -65,8 +114,11 @@ service cloud.firestore {
     match /tables/{id} {
       allow read: if true;
       allow write: if isAdmin();
+      allow update: if moveIn() || moveOut(id);
       allow update: if request.resource.data.diff(resource.data).affectedKeys()
-                         .hasOnly(['sessionId', 'sessionOpenedAt'])
+                         .hasOnly(['sessionId', 'sessionOpenedAt', 'movedFrom', 'movedTo'])
+                    && request.resource.data.get('movedFrom', null) == null
+                    && request.resource.data.get('movedTo', null) == null
                     && request.resource.data.sessionId is string
                     && request.resource.data.sessionId.size() >= 12
                     && request.resource.data.sessionId.size() <= 40
@@ -132,7 +184,7 @@ service cloud.firestore {
                     && openNow(outletCfg());
       allow get: if true;
       allow list: if isAdmin();
-      allow update: if isAdmin() || proofUpdate();
+      allow update: if isAdmin() || proofUpdate() || orderMove();
       allow delete: if isAdmin();
     }
 

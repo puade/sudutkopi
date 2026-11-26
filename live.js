@@ -290,6 +290,10 @@ const Live = (() => {
     } catch (e) { console.warn("Bukti tidak tersalin ke chat:", e.code || e.message); }
   }
 
+  /* ---------- Tombol chat di navigasi bawah ---------- */
+  const chatEnabled = () => hasDb && Session.canChat();
+  const renderChatBtn = () => $("#btnChat").classList.toggle("is-off", !chatEnabled());
+
   /* ---------- Sesi meja ---------- */
   // Pelanggan baru di meja ini: hapus riwayat pelanggan sebelumnya (notifikasi, pesanan terlacak, chat)
   function reset() {
@@ -303,7 +307,7 @@ const Live = (() => {
 
   function onSessionChange() {
     if (Session.changedSince("outletmu_live_sid")) reset();
-    $("#fabWrap").hidden = !(hasDb && Session.canChat());
+    renderChatBtn();
     if (!Session.canChat() && isOpen("chatSheet")) closeSheet();
   }
 
@@ -311,7 +315,7 @@ const Live = (() => {
   function init() {
     hydrateIcons();
     if (Session.changedSince("outletmu_live_sid")) reset();
-    $("#fabWrap").hidden = !(hasDb && Session.canChat()); // chat butuh Firestore + sesi meja aktif
+    renderChatBtn(); // chat butuh Firestore + sesi meja aktif
     Session.onChange(onSessionChange);
     renderBell();
     renderFab();
@@ -323,7 +327,10 @@ const Live = (() => {
       renderNotifs();
       renderBell();
     });
-    $("#btnChat").addEventListener("click", openChat);
+    $("#btnChat").addEventListener("click", () => {
+      if (!chatEnabled()) { toast(Session.blockText() || "Chat aktif setelah kamu scan QR meja.", "info", "info"); return; }
+      openChat();
+    });
     $("#chatForm").addEventListener("submit", (e) => {
       e.preventDefault();
       const input = $("#chatInput");
